@@ -1,71 +1,48 @@
 // server/src/index.js
-import path from 'node:path';
-import fs from 'node:fs/promises';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
-import { fileURLToPath } from 'node:url';
-import { getPool } from './db.js';
 
+// === IMPORT CÁC ROUTE CỦA BẠN ===
 import orderRoutes from "./routes/order.js";
 import uploadsRouter from './routes/uploads.js';
 import imgProxy from './routes/imgProxy.js';
+// (Bạn có thể thêm các route khác nếu cần)
 
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-// mở kết nối DB sớm
-await getPool();
+// === LỖI #3: BỎ KẾT NỐI SQL KHÔNG DÙNG ===
+// Dòng này đang chạy và có thể làm crash server nếu thiếu ENV
+// await getPool(); 
+// Hãy comment (vô hiệu hóa) nó lại như trên
 
+// Lấy CLIENT_ORIGIN từ biến môi trường Vercel
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 
-app.use(cookieParser());
-app.use(express.json({ limit: '2mb' }));
+// === SỬA LỖI CORS ===
+// Phải dùng biến CLIENT_ORIGIN mà bạn đã set trên Vercel
 app.use(cors({
-  origin: 'https://stylesnap.vercel.app' // <-- THAY BẰNG DOMAIN WEBSITE CỦA BẠN
+  origin: CLIENT_ORIGIN, // <-- Sửa ở đây
+  credentials: true // Có thể bạn sẽ cần cho các chức năng khác
 }));
 
-// tăng limit để nhận dataURL preview
+app.use(cookieParser());
+
+// Tăng limit để nhận dataURL/ảnh
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
-// API routes
 
+// === ĐỊNH NGHĨA API ROUTES ===
 app.use("/api/order", orderRoutes);
 app.use('/api/uploads', uploadsRouter);
 app.use('/api/img', imgProxy);
 
-// Health
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
+// Health check
+app.get('/api/health', (_req, res) => res.json({ ok: true, message: 'API is running' }));
 
-// ---------- SPA fallback ----------
-if (process.env.NODE_ENV !== 'production') {
-  const { createServer } = await import('vite');
-  const vite = await createServer({ server: { middlewareMode: true }, appType: 'custom' });
-  app.use(vite.middlewares);
+// === LỖI NGHIÊM TRỌNG #2 ===
+// XÓA TOÀN BỘ KHỐI LOGIC if(NODE_ENV)/else
+// Vercel không cần logic đó, vercel.json đã xử lý việc này.
 
-  app.get(/^(?!\/api\/).*/, async (req, res, next) => {
-    try {
-      const url = req.originalUrl;
-      const html = await fs.readFile(path.resolve(process.cwd(), 'index.html'), 'utf8');
-      const transformed = await vite.transformIndexHtml(url, html);
-      res.status(200).set({ 'Content-Type': 'text/html' }).end(transformed);
-    } catch (e) { vite.ssrFixStacktrace?.(e); next(e); }
-  });
-} else {
-  const distDir = path.resolve(__dirname, '../../dist');
-  app.use(express.static(distDir));
-  app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(path.join(distDir, 'index.html')));
-}
-
-// Error handler
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  if (res.headersSent) return next(err);
-  res.status(500).json({ error: 'Internal server error' });
-});
-
-const port = process.env.PORT || 3000;
-app.listen(process.env.PORT || 3001, () => {
-  console.log('Server is running');
-});
+// === THÊM DÒNG NÀY ĐỂ VERCE HOẠT ĐỘNG ===
+export default app;
