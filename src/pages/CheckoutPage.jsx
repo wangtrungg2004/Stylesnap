@@ -1,5 +1,5 @@
 // src/pages/CheckoutPage.jsx
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import state from "../store";
 
@@ -10,7 +10,7 @@ function Notice({ kind = "pending", title, message }) {
                          "bg-amber-50 text-amber-800 ring-amber-600/20";
   const icon = kind === "success" ? "✔" : kind === "error" ? "✖" : "…";
   return (
-    <div className={["w-[300px] rounded-xl ring-1 px-3 py-2 shadow-sm", "backdrop-blur-sm", color].join(" ")}>
+    <div className={["w-[320px] rounded-xl ring-1 px-3 py-2 shadow-sm", "backdrop-blur-sm", color].join(" ")}>
       <div className="flex items-start gap-2">
         <div className="text-base leading-none">{icon}</div>
         <div className="min-w-0">
@@ -22,13 +22,46 @@ function Notice({ kind = "pending", title, message }) {
   );
 }
 
+// ===== Pricing config (đổi tùy ý) =====
+const PRICING = {
+  retailUnit: 159000,        // VND/chiếc (lẻ)
+  wholesaleUnit: 129000,     // VND/chiếc (sỉ)
+  wholesaleThreshold: 10,    // Sỉ từ số lượng này trở lên
+  materials: [
+    { value: "cotton100",  label: "Cotton 100%" },
+    { value: "cottonBlend", label: "Cotton pha" },
+  ],
+};
+
+const vnd = (n) => (Number(n) || 0).toLocaleString("vi-VN", { style: "currency", currency: "VND" });
+
 export default function CheckoutPage() {
   const [method, setMethod] = useState("");
   const [form, setForm] = useState({ name: "", phone: "", email: "", address: "" });
+  const [product, setProduct] = useState({ material: PRICING.materials[0].value, qty: 1 });
   const [payNotice, setPayNotice] = useState({ visible:false, kind:"pending", title:"", message:"" });
   const nav = useNavigate();
 
   const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+
+  const handleProductChange = (field, value) => {
+    if (field === "qty") {
+      const n = Math.max(1, parseInt(value || "1", 10));
+      return setProduct((p) => ({ ...p, qty: n }));
+    }
+    setProduct((p) => ({ ...p, [field]: value }));
+  };
+
+  const priceCalc = useMemo(() => {
+    const qty = product.qty || 1;
+    const useWholesale = qty >= PRICING.wholesaleThreshold;
+    const unitPrice = useWholesale ? PRICING.wholesaleUnit : PRICING.retailUnit;
+    const totalRetail = qty * PRICING.retailUnit;
+    const totalWholesale = qty * PRICING.wholesaleUnit;
+    const chargeTotal = useWholesale ? totalWholesale : totalRetail;
+    const applied = useWholesale ? "wholesale" : "retail";
+    return { qty, useWholesale, unitPrice, totalRetail, totalWholesale, chargeTotal, applied };
+  }, [product.qty]);
 
   async function createOrder(payload) {
     const res = await fetch("/api/order", {
@@ -50,18 +83,33 @@ export default function CheckoutPage() {
 
     // Lấy thông tin thiết kế đã lưu gần nhất (nếu có)
     const sd = state.lastSavedDesign || {};
+
+    // Payload gửi order (thêm product + pricing breakdown)
     const payload = {
       ...form,
       method,
-      // các URL phục vụ email/đính kèm
+      // design context
       previewFrontUrl: sd.previewFrontUrl || null,
       previewBackUrl:  sd.previewBackUrl  || null,
       userAssetUrl:    Array.isArray(sd.assets) && sd.assets[0]?.url ? sd.assets[0].url : null,
       colorHex: state.color || null,
       designId: sd.designId || null,
+      // product
+      material: product.material,
+      quantity: priceCalc.qty,
+      pricing: {
+        retailUnit: PRICING.retailUnit,
+        wholesaleUnit: PRICING.wholesaleUnit,
+        wholesaleThreshold: PRICING.wholesaleThreshold,
+        unitPrice: priceCalc.unitPrice,
+        totalRetail: priceCalc.totalRetail,
+        totalWholesale: priceCalc.totalWholesale,
+        applied: priceCalc.applied,          // "retail" | "wholesale"
+        chargeTotal: priceCalc.chargeTotal,  // số tiền nên thu theo ngưỡng
+      },
     };
 
-    // Nếu chọn QR -> lưu context vào localStorage để /return gửi mail khách đủ thông tin
+    // Nếu chọn QR → lưu context để PaymentReturn gửi kèm (sau thanh toán)
     if (method === "qr") {
       try {
         localStorage.setItem("stylesnap_checkout_email", form.email || "");
@@ -74,6 +122,14 @@ export default function CheckoutPage() {
             previewBackUrl: payload.previewBackUrl || null,
             userAssetUrl: payload.userAssetUrl || null,
             designId: payload.designId || null,
+            // product context
+            productMaterial: payload.material,
+            quantity: payload.quantity,
+            unitPrice: payload.pricing.unitPrice,
+            totalRetail: payload.pricing.totalRetail,
+            totalWholesale: payload.pricing.totalWholesale,
+            appliedPricing: payload.pricing.applied,
+            chargeTotal: payload.pricing.chargeTotal,
           })
         );
       } catch {}
@@ -107,6 +163,7 @@ export default function CheckoutPage() {
 
       <h1 className="text-2xl font-bold mb-6">Thanh toán đơn hàng</h1>
 
+      {/* Thông tin giao hàng */}
       <div className="w-full max-w-md bg-white p-6 rounded-lg shadow mb-6">
         <h2 className="text-lg font-semibold mb-4">Thông tin giao hàng</h2>
         <div className="flex flex-col gap-3">
@@ -117,12 +174,75 @@ export default function CheckoutPage() {
         </div>
       </div>
 
+      {/* Sản phẩm */}
+      <div className="w-full max-w-md bg-white p-6 rounded-lg shadow mb-6">
+        <h2 className="text-lg font-semibold mb-4">Sản phẩm</h2>
+
+        {/* Chất liệu */}
+        <label className="block text-sm font-medium mb-1">Chất liệu áo</label>
+        <select
+          className="w-full border rounded px-3 py-2 mb-4"
+          value={product.material}
+          onChange={(e) => handleProductChange("material", e.target.value)}
+        >
+          {PRICING.materials.map((m) => (
+            <option key={m.value} value={m.value}>{m.label}</option>
+          ))}
+        </select>
+
+        {/* Số lượng */}
+        <label className="block text-sm font-medium mb-1">Số lượng</label>
+        <input
+          type="number"
+          min={1}
+          className="w-40 border rounded px-3 py-2"
+          value={product.qty}
+          onChange={(e) => handleProductChange("qty", e.target.value)}
+        />
+
+        {/* Bảng giá */}
+        <div className="mt-5 p-4 rounded-lg border bg-gray-50">
+          <div className="text-sm text-gray-700">
+            <div className="flex justify-between">
+              <span>Đơn giá lẻ</span>
+              <strong>{vnd(PRICING.retailUnit)}</strong>
+            </div>
+            <div className="flex justify-between">
+              <span>Đơn giá sỉ (≥ {PRICING.wholesaleThreshold})</span>
+              <strong>{vnd(PRICING.wholesaleUnit)}</strong>
+            </div>
+            <hr className="my-3" />
+            <div className="flex justify-between">
+              <span>Tổng tiền lẻ (x{priceCalc.qty})</span>
+              <strong>{vnd(priceCalc.totalRetail)}</strong>
+            </div>
+            <div className="flex justify-between">
+              <span>Tổng tiền sỉ (x{priceCalc.qty})</span>
+              <strong>{vnd(priceCalc.totalWholesale)}</strong>
+            </div>
+            <div className="mt-3 px-3 py-2 rounded-md bg-white ring-1 ring-gray-200">
+              <div className="text-xs text-gray-600 mb-1">Áp dụng</div>
+              <div className="flex items-center justify-between">
+                <span className="font-medium">
+                  {priceCalc.useWholesale ? `Sỉ (≥ ${PRICING.wholesaleThreshold})` : "Lẻ"}
+                </span>
+                <span className="text-gray-600">Số tiền tạm tính</span>
+              </div>
+              <div className="text-right text-lg font-semibold">{vnd(priceCalc.chargeTotal)}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Phương thức thanh toán */}
       <div className="w-full max-w-md bg-white p-6 rounded-lg shadow mb-6">
         <h2 className="text-lg font-semibold mb-4">Phương thức thanh toán</h2>
         <div className="flex flex-col gap-3">
           <label className="flex items-center gap-2">
             <input type="radio" name="method" value="cod" checked={method === "cod"} onChange={() => setMethod("cod")} /> COD
           </label>
+        </div>
+        <div className="flex flex-col gap-3 mt-2">
           <label className="flex items-center gap-2">
             <input type="radio" name="method" value="qr" checked={method === "qr"} onChange={() => setMethod("qr")} /> Quét QR Code
           </label>
@@ -131,7 +251,7 @@ export default function CheckoutPage() {
         {method === "qr" && (
           <div className="mt-4 p-4 border rounded bg-gray-50">
             <p className="mb-2">Quét mã QR sau để thanh toán:</p>
-            {/* tuỳ bạn render QR thực tế */}
+            {/* Placeholder QR, thay bằng ảnh QR thực tế */}
             <img src="/qrcode.jpg" alt="QR Code" className="w-48 h-48 mx-auto" />
           </div>
         )}
