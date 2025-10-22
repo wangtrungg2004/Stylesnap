@@ -48,6 +48,11 @@ export default function CheckoutPage() {
 
     setPayNotice({ visible:true, kind:"pending", title:"Đang tạo đơn…", message: method==="qr" ? "Sẽ hiển thị hướng dẫn thanh toán." : "" });
 
+    // NEW: nếu chọn QR và có email, lưu tạm để PaymentReturn gửi mail xác nhận sau khi cổng trả về
+    if (method === "qr" && form.email) {
+      try { localStorage.setItem("stylesnap_checkout_email", form.email); } catch {}
+    }
+
     // Lấy 3 ảnh (nếu có) từ lần “Lưu thiết kế” gần nhất – KHÔNG BẮT BUỘC
     const sd = state.lastSavedDesign || {};
     const payload = {
