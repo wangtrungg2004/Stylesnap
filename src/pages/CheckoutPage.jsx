@@ -1,5 +1,5 @@
 // src/pages/CheckoutPage.jsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import state from "../store";
 
@@ -22,7 +22,7 @@ function Notice({ kind = "pending", title, message }) {
   );
 }
 
-// ===== Pricing config (đổi tùy ý) =====
+/** ===== Pricing config (có thể chỉnh) ===== */
 const PRICING = {
   retailUnit: 159000,        // VND/chiếc (lẻ)
   wholesaleUnit: 129000,     // VND/chiếc (sỉ)
@@ -35,6 +35,61 @@ const PRICING = {
 
 const vnd = (n) => (Number(n) || 0).toLocaleString("vi-VN", { style: "currency", currency: "VND" });
 
+/** ====== Stepper Input cho Số lượng ======
+ * - Cho phép xoá trắng và gõ tay (input type="text")
+ * - Nút – / + để giảm/tăng
+ * - Chuẩn hoá về >=1 khi blur hay khi bấm nút
+ */
+function QtyStepper({ value, min = 1, onChangeNumber }) {
+  const [raw, setRaw] = useState(String(value ?? min));
+
+  useEffect(() => {
+    setRaw(String(value ?? ""));
+  }, [value]);
+
+  const clampToMin = (n) => Math.max(min, n || min);
+
+  const applyFromRaw = () => {
+    const parsed = parseInt(raw.replace(/[^\d]/g, ""), 10);
+    const next = isNaN(parsed) ? min : clampToMin(parsed);
+    onChangeNumber(next);
+  };
+
+  const dec = () => onChangeNumber(clampToMin((Number(value) || min) - 1));
+  const inc = () => onChangeNumber(clampToMin((Number(value) || min) + 1));
+
+  return (
+    <div className="inline-flex items-stretch rounded-lg ring-1 ring-gray-300 overflow-hidden">
+      <button
+        type="button"
+        onClick={dec}
+        aria-label="Giảm số lượng"
+        className="px-3 select-none hover:bg-gray-100 active:bg-gray-200"
+      >
+        –
+      </button>
+      <input
+        type="text"
+        inputMode="numeric"
+        aria-label="Số lượng áo"
+        placeholder="1"
+        value={raw}
+        onChange={(e) => setRaw(e.target.value)}
+        onBlur={applyFromRaw}
+        className="w-24 text-center outline-none px-2"
+      />
+      <button
+        type="button"
+        onClick={inc}
+        aria-label="Tăng số lượng"
+        className="px-3 select-none hover:bg-gray-100 active:bg-gray-200"
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
 export default function CheckoutPage() {
   const [method, setMethod] = useState("");
   const [form, setForm] = useState({ name: "", phone: "", email: "", address: "" });
@@ -44,13 +99,7 @@ export default function CheckoutPage() {
 
   const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
 
-  const handleProductChange = (field, value) => {
-    if (field === "qty") {
-      const n = Math.max(1, parseInt(value || "1", 10));
-      return setProduct((p) => ({ ...p, qty: n }));
-    }
-    setProduct((p) => ({ ...p, [field]: value }));
-  };
+  const setQty = (n) => setProduct((p) => ({ ...p, qty: n }));
 
   const priceCalc = useMemo(() => {
     const qty = product.qty || 1;
@@ -73,13 +122,44 @@ export default function CheckoutPage() {
     try { return await res.json(); } catch { return { ok:true }; }
   }
 
-  const handleConfirm = async () => {
-    if (!form.name || !form.phone || !form.address)
-      return setPayNotice({ visible:true, kind:"error", title:"Thiếu thông tin giao hàng", message:"Nhập đủ họ tên, điện thoại, địa chỉ." });
-    if (!method)
-      return setPayNotice({ visible:true, kind:"error", title:"Chưa chọn phương thức", message:"Chọn COD hoặc QR." });
+  const validateRequired = () => {
+    const nameOk = !!form.name?.trim();
+    const phoneOk = !!form.phone?.trim();
+    const addrOk = !!form.address?.trim();
+    const qtyOk = Number(product.qty) >= 1;
 
-    setPayNotice({ visible:true, kind:"pending", title:"Đang tạo đơn…", message: method==="qr" ? "Sẽ hiển thị hướng dẫn thanh toán." : "" });
+    if (!nameOk || !phoneOk || !addrOk || !qtyOk) {
+      let miss = [];
+      if (!nameOk) miss.push("Họ tên");
+      if (!phoneOk) miss.push("Số điện thoại");
+      if (!addrOk) miss.push("Địa chỉ");
+      if (!qtyOk) miss.push("Số lượng áo");
+      setPayNotice({
+        visible: true,
+        kind: "error",
+        title: "Thiếu thông tin bắt buộc",
+        message: `Vui lòng nhập: ${miss.join(", ")}.`,
+      });
+      return false;
+    }
+    return true;
+  };
+
+  const handleConfirm = async () => {
+    if (!validateRequired()) return;
+
+    if (!method) {
+      return setPayNotice({
+        visible:true, kind:"error",
+        title:"Chưa chọn phương thức", message:"Chọn COD hoặc QR."
+      });
+    }
+
+    setPayNotice({
+      visible:true, kind:"pending",
+      title:"Đang tạo đơn…",
+      message: method==="qr" ? "Sẽ hiển thị hướng dẫn thanh toán." : ""
+    });
 
     // Lấy thông tin thiết kế đã lưu gần nhất (nếu có)
     const sd = state.lastSavedDesign || {};
@@ -109,7 +189,7 @@ export default function CheckoutPage() {
       },
     };
 
-    // Nếu chọn QR → lưu context để PaymentReturn gửi kèm (sau thanh toán)
+    // Nếu chọn QR → lưu context để PaymentReturn gửi kèm sau thanh toán
     if (method === "qr") {
       try {
         localStorage.setItem("stylesnap_checkout_email", form.email || "");
@@ -163,14 +243,59 @@ export default function CheckoutPage() {
 
       <h1 className="text-2xl font-bold mb-6">Thanh toán đơn hàng</h1>
 
-      {/* Thông tin giao hàng */}
+      {/* Thông tin giao hàng (bắt buộc) */}
       <div className="w-full max-w-md bg-white p-6 rounded-lg shadow mb-6">
         <h2 className="text-lg font-semibold mb-4">Thông tin giao hàng</h2>
         <div className="flex flex-col gap-3">
-          <input type="text" name="name" placeholder="Họ và tên" value={form.name} onChange={handleChange} className="border rounded px-3 py-2" />
-          <input type="text" name="phone" placeholder="Số điện thoại" value={form.phone} onChange={handleChange} className="border rounded px-3 py-2" />
-          <input type="email" name="email" placeholder="Email (để nhận xác nhận thanh toán)" value={form.email} onChange={handleChange} className="border rounded px-3 py-2" />
-          <textarea name="address" placeholder="Địa chỉ giao hàng" value={form.address} onChange={handleChange} className="border rounded px-3 py-2" />
+          <label className="text-sm font-medium">
+            Họ và tên <span className="text-red-600">*</span>
+            <input
+              required
+              type="text"
+              name="name"
+              placeholder="VD: Nguyễn Văn A"
+              value={form.name}
+              onChange={handleChange}
+              className="mt-1 w-full border rounded px-3 py-2"
+            />
+          </label>
+
+          <label className="text-sm font-medium">
+            Số điện thoại <span className="text-red-600">*</span>
+            <input
+              required
+              type="tel"
+              name="phone"
+              placeholder="VD: 09xxxxxxxx"
+              value={form.phone}
+              onChange={handleChange}
+              className="mt-1 w-full border rounded px-3 py-2"
+            />
+          </label>
+
+          <label className="text-sm font-medium">
+            Email (nhận xác nhận thanh toán)
+            <input
+              type="email"
+              name="email"
+              placeholder="(không bắt buộc)"
+              value={form.email}
+              onChange={handleChange}
+              className="mt-1 w-full border rounded px-3 py-2"
+            />
+          </label>
+
+          <label className="text-sm font-medium">
+            Địa chỉ giao hàng <span className="text-red-600">*</span>
+            <textarea
+              required
+              name="address"
+              placeholder="Số nhà/đường, phường/xã, quận/huyện, tỉnh/thành phố"
+              value={form.address}
+              onChange={handleChange}
+              className="mt-1 w-full border rounded px-3 py-2"
+            />
+          </label>
         </div>
       </div>
 
@@ -183,22 +308,18 @@ export default function CheckoutPage() {
         <select
           className="w-full border rounded px-3 py-2 mb-4"
           value={product.material}
-          onChange={(e) => handleProductChange("material", e.target.value)}
+          onChange={(e) => setProduct((p) => ({ ...p, material: e.target.value }))}
         >
           {PRICING.materials.map((m) => (
             <option key={m.value} value={m.value}>{m.label}</option>
           ))}
         </select>
 
-        {/* Số lượng */}
-        <label className="block text-sm font-medium mb-1">Số lượng</label>
-        <input
-          type="number"
-          min={1}
-          className="w-40 border rounded px-3 py-2"
-          value={product.qty}
-          onChange={(e) => handleProductChange("qty", e.target.value)}
-        />
+        {/* Số lượng (bắt buộc) */}
+        <label className="block text-sm font-medium mb-1">
+          Số lượng áo <span className="text-red-600">*</span>
+        </label>
+        <QtyStepper value={product.qty} min={1} onChangeNumber={setQty} />
 
         {/* Bảng giá */}
         <div className="mt-5 p-4 rounded-lg border bg-gray-50">
@@ -241,8 +362,6 @@ export default function CheckoutPage() {
           <label className="flex items-center gap-2">
             <input type="radio" name="method" value="cod" checked={method === "cod"} onChange={() => setMethod("cod")} /> COD
           </label>
-        </div>
-        <div className="flex flex-col gap-3 mt-2">
           <label className="flex items-center gap-2">
             <input type="radio" name="method" value="qr" checked={method === "qr"} onChange={() => setMethod("qr")} /> Quét QR Code
           </label>
