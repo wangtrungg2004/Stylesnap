@@ -2,12 +2,12 @@ import express from "express";
 import crypto from "crypto";
 import moment from "moment";
 import sql from "mssql";
-import { getPool } from "../db.js";
-import { sendMail } from "../utils/mailer.js"; // <-- NEW
+import { getPool } from "../db.js";          // điều chỉnh path nếu khác
+import { sendMail } from "../utils/mailer.js"; // điều chỉnh import nếu là default export
 
 const router = express.Router();
 
-// helper: lấy IP client chuẩn (qua proxy)
+// Helper: lấy IP
 function getClientIp(req) {
   return (
     req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
@@ -17,16 +17,12 @@ function getClientIp(req) {
   );
 }
 
-// ========== 1) Tạo thanh toán (VNPay) ==========
+// (Tùy dự án bạn) API tạo thanh toán VNPay
 router.get("/create", async (req, res) => {
   try {
     const { designId, userId } = req.query;
+    if (!designId || !userId) return res.status(400).json({ error: "Missing designId/userId" });
 
-    if (!designId || !userId) {
-      return res.status(400).json({ error: "Missing designId/userId" });
-    }
-
-    // ENV bắt buộc
     const tmnCode   = process.env.VNP_TMNCODE;
     const secretKey = process.env.VNP_HASHSECRET;
     const returnUrl = process.env.VNP_RETURN_URL;
@@ -35,29 +31,25 @@ router.get("/create", async (req, res) => {
       return res.status(500).json({ error: "VNPay config missing" });
     }
 
-    // amount (VND). VNPay yêu cầu vnp_Amount = VND * 100
-    const amountVnd = 100000; // 100,000 VND cho test
-    const amountVnp = amountVnd * 100; // 10,000,000
+    const amountVnd = 100000; // demo
+    const amountVnp = amountVnd * 100;
 
-    // 1. Ghi Payment pending vào DB
     const pool = await getPool();
     const ins = await pool
       .request()
       .input("user_id", sql.Int, Number(userId))
       .input("design_id", sql.Int, Number(designId))
-      .input("amount", sql.Int, amountVnd) // lưu VND bình thường (không *100) cho dễ đọc
+      .input("amount", sql.Int, amountVnd)
       .input("method", sql.NVarChar(20), "VNPay")
       .query(`
         INSERT INTO Payments (user_id, design_id, amount, payment_method, status, created_at)
         OUTPUT INSERTED.id
         VALUES (@user_id, @design_id, @amount, @method, 'pending', SYSUTCDATETIME())
       `);
-
     const paymentId = ins.recordset[0].id;
 
-    // 2. Tạo tham số VNPay
     const date = moment().format("YYYYMMDDHHmmss");
-    const orderId = moment().format("HHmmss"); // mã đơn nội bộ (unique theo thời điểm)
+    const orderId = moment().format("HHmmss");
 
     let vnp_Params = {
       vnp_Version: "2.1.0",
@@ -69,13 +61,12 @@ router.get("/create", async (req, res) => {
       vnp_TxnRef: orderId,
       vnp_OrderInfo: `Thanh toan design ${designId}`,
       vnp_OrderType: "other",
-      vnp_Amount: String(amountVnp), // phải là số nguyên dạng string
+      vnp_Amount: String(amountVnp),
       vnp_ReturnUrl: `${returnUrl}?designId=${designId}&paymentId=${paymentId}&userId=${userId}`,
       vnp_IpAddr: getClientIp(req),
       vnp_CreateDate: date,
     };
 
-    // Ký hash theo thứ tự key sort tăng dần
     const signData = Object.keys(vnp_Params)
       .sort()
       .map((k) => `${k}=${vnp_Params[k]}`)
@@ -96,10 +87,65 @@ router.get("/create", async (req, res) => {
   }
 });
 
-// ========== 2) Xác nhận thanh toán (VNPay return -> FE -> /confirm) ==========
+// === Builder HTML cho email khách (có ảnh/chi tiết) ===
+function buildCustomerHtml({
+  paymentId, transactionId, designId, status,
+  colorHex, previewFrontUrl, previewBackUrl, userAssetUrl,
+}) {
+  const safe = (v, fallback = "(không có)") => (v ? String(v) : fallback);
+  const imgBox = (url, label) => {
+    if (!url) return `<div style="font-size:13px;color:#666">${label}: (không có)</div>`;
+    const esc = String(url);
+    return `
+      <div style="display:inline-block;margin-right:12px;margin-bottom:12px;">
+        <div style="font-weight:600;margin-bottom:6px">${label}</div>
+        <a href="${esc}" target="_blank" rel="noopener">
+          <img src="${esc}" alt="${label}" style="width:200px;max-width:200px;height:auto;border:1px solid #eee;border-radius:8px;display:block" />
+        </a>
+      </div>
+    `;
+  };
+  const colorCell = colorHex
+    ? `<span style="display:inline-block;width:12px;height:12px;border:1px solid #ccc;border-radius:2px;background:${colorHex};vertical-align:middle;margin-right:6px"></span> ${colorHex}`
+    : "(không có)";
+
+  return `
+  <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6;color:#111">
+    <h2 style="margin:0 0 12px">Xác nhận thanh toán thành công</h2>
+    <p style="margin:0 0 4px"><b>Payment ID:</b> ${safe(paymentId, "-")}</p>
+    <p style="margin:0 0 4px"><b>Mã giao dịch (cổng):</b> ${safe(transactionId, "-")}</p>
+    <p style="margin:0 0 12px"><b>Trạng thái:</b> ${safe(status, "-")}</p>
+
+    <h3 style="margin:16px 0 8px">Thông tin thiết kế</h3>
+    <table style="border-collapse:collapse;border-spacing:0">
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#555">Màu vải</td>
+        <td style="padding:6px 0">${colorCell}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#555">Design ID</td>
+        <td style="padding:6px 0">${safe(designId)}</td>
+      </tr>
+    </table>
+
+    <div style="margin-top:12px">
+      ${imgBox(previewFrontUrl, "Front")}
+      ${imgBox(previewBackUrl, "Back")}
+      ${imgBox(userAssetUrl, "Upload")}
+    </div>
+
+    <p style="margin-top:16px;color:#444">Nếu ảnh không hiển thị, hãy bấm vào từng mục để mở trong trình duyệt.</p>
+  </div>`;
+}
+
+// Xác nhận thanh toán & gửi mail (xưởng + khách)
 router.post("/confirm", async (req, res) => {
   try {
-    const { paymentId, vnp_ResponseCode, transactionId, designId, userId, email } = req.body || {};
+    const {
+      paymentId, vnp_ResponseCode, transactionId, designId, userId, email,
+      // NEW: nhận thêm các trường cho email khách
+      colorHex, previewFrontUrl, previewBackUrl, userAssetUrl,
+    } = req.body || {};
     if (!paymentId) return res.status(400).json({ error: "Missing paymentId" });
 
     const status = vnp_ResponseCode === "00" ? "success" : "failed";
@@ -118,25 +164,20 @@ router.post("/confirm", async (req, res) => {
         WHERE id = @payment_id
       `);
 
-    // NEW: Nếu thanh toán thành công, gửi email cho xưởng + khách
     if (status === "success") {
+      // Gửi cho xưởng (như cũ)
       const factoryTo = process.env.FACTORY_EMAIL;
-      const subjectFactory = `[PAID] Payment #${paymentId} thành công`;
-      const subjectBuyer = `Xác nhận thanh toán thành công – Stylesnap (#${paymentId})`;
-      const html = `
-        <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6">
-          <h2>Thanh toán thành công</h2>
-          <p><b>Payment ID:</b> ${paymentId}</p>
-          <p><b>Mã giao dịch (cổng):</b> ${transactionId || "-"}</p>
-          <p><b>Design ID:</b> ${designId || "-"}</p>
-          <p><b>Trạng thái:</b> ${status}</p>
-        </div>
-      `;
-
-      // gửi cho xưởng (bắt buộc)
       if (factoryTo) {
+        const factoryHtml = `
+          <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6">
+            <h2>Thanh toán thành công</h2>
+            <p><b>Payment ID:</b> ${paymentId}</p>
+            <p><b>Mã giao dịch (cổng):</b> ${transactionId || "-"}</p>
+            <p><b>Design ID:</b> ${designId || "-"}</p>
+            <p><b>Trạng thái:</b> ${status}</p>
+          </div>`;
         try {
-          await sendMail({ to: factoryTo, subject: subjectFactory, html });
+          await sendMail({ to: factoryTo, subject: `[PAID] Payment #${paymentId} thành công`, html: factoryHtml });
         } catch (e) {
           console.error("[payment confirm] mail to factory failed:", e?.message || e);
         }
@@ -144,11 +185,21 @@ router.post("/confirm", async (req, res) => {
         console.error("[payment confirm] FACTORY_EMAIL is not configured");
       }
 
-      // gửi cho khách (nếu có email từ FE)
+      // Gửi cho khách — thêm ảnh & thông tin đầy đủ
       if (email) {
-        // không await để tránh chậm phản hồi
-        sendMail({ to: email, subject: subjectBuyer, html })
-          .catch(e => console.error("[payment confirm] mail to buyer failed:", e?.message || e));
+        const html = buildCustomerHtml({
+          paymentId, transactionId, designId, status,
+          colorHex: colorHex || null,
+          previewFrontUrl: previewFrontUrl || null,
+          previewBackUrl: previewBackUrl || null,
+          userAssetUrl: userAssetUrl || null,
+        });
+        // Không await để phản hồi nhanh
+        sendMail({
+          to: email,
+          subject: `Xác nhận thanh toán thành công – Stylesnap (#${paymentId})`,
+          html,
+        }).catch(e => console.error("[payment confirm] mail to buyer failed:", e?.message || e));
       }
     }
 
@@ -159,15 +210,10 @@ router.post("/confirm", async (req, res) => {
   }
 });
 
-// ========== 3) Kiểm tra đã thanh toán chưa ==========
+// (Tùy dự án bạn) API check trạng thái
 router.get("/check", async (req, res) => {
   const { designId, userId } = req.query;
-
-  if (!designId || !userId) {
-    // Thiếu tham số: coi như chưa thanh toán để FE còn đi /create
-    return res.json({ status: "not_paid" });
-  }
-
+  if (!designId || !userId) return res.json({ status: "not_paid" });
   try {
     const pool = await getPool();
     const result = await pool
@@ -180,16 +226,11 @@ router.get("/check", async (req, res) => {
         WHERE user_id = @user_id AND design_id = @design_id
         ORDER BY created_at DESC
       `);
-
-    if (!result.recordset.length) {
-      return res.json({ status: "not_paid" });
-    }
-    const status = result.recordset[0].status || "not_paid";
-    // Chỉ coi là đã thanh toán khi status = 'success'
-    return res.json({ status: status === "success" ? "success" : "not_paid" });
+    if (!result.recordset.length) return res.json({ status: "not_paid" });
+    const s = result.recordset[0].status || "not_paid";
+    return res.json({ status: s === "success" ? "success" : "not_paid" });
   } catch (err) {
     console.error("Payment check error:", err?.message || err);
-    // QUAN TRỌNG: không ném 500 nữa → trả not_paid để FE tiếp tục /create
     return res.json({ status: "not_paid" });
   }
 });
