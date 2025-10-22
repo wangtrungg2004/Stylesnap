@@ -2,12 +2,12 @@ import express from "express";
 import crypto from "crypto";
 import moment from "moment";
 import sql from "mssql";
-import { getPool } from "../db.js";          // điều chỉnh path nếu khác
-import { sendMail } from "../utils/mailer.js"; // điều chỉnh import nếu là default export
+import { getPool } from "../db.js";
+import { sendMail } from "../utils/mailer.js"; // <-- thêm import gửi mail
 
 const router = express.Router();
 
-// Helper: lấy IP
+// helper: lấy IP client chuẩn (qua proxy)
 function getClientIp(req) {
   return (
     req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
@@ -17,11 +17,14 @@ function getClientIp(req) {
   );
 }
 
-// (Tùy dự án bạn) API tạo thanh toán VNPay
+// ===== (1) Tạo thanh toán (VNPay) =====
 router.get("/create", async (req, res) => {
   try {
     const { designId, userId } = req.query;
-    if (!designId || !userId) return res.status(400).json({ error: "Missing designId/userId" });
+
+    if (!designId || !userId) {
+      return res.status(400).json({ error: "Missing designId/userId" });
+    }
 
     const tmnCode   = process.env.VNP_TMNCODE;
     const secretKey = process.env.VNP_HASHSECRET;
@@ -46,6 +49,7 @@ router.get("/create", async (req, res) => {
         OUTPUT INSERTED.id
         VALUES (@user_id, @design_id, @amount, @method, 'pending', SYSUTCDATETIME())
       `);
+
     const paymentId = ins.recordset[0].id;
 
     const date = moment().format("YYYYMMDDHHmmss");
@@ -87,12 +91,12 @@ router.get("/create", async (req, res) => {
   }
 });
 
-// === Builder HTML cho email khách (có ảnh/chi tiết) ===
+// ===== helper: HTML cho mail khách (đủ ảnh/chi tiết) =====
 function buildCustomerHtml({
   paymentId, transactionId, designId, status,
   colorHex, previewFrontUrl, previewBackUrl, userAssetUrl,
 }) {
-  const safe = (v, fallback = "(không có)") => (v ? String(v) : fallback);
+  const safe = (v, fb = "(không có)") => (v ? String(v) : fb);
   const imgBox = (url, label) => {
     if (!url) return `<div style="font-size:13px;color:#666">${label}: (không có)</div>`;
     const esc = String(url);
@@ -124,7 +128,7 @@ function buildCustomerHtml({
       </tr>
       <tr>
         <td style="padding:6px 12px 6px 0;color:#555">Design ID</td>
-        <td style="padding:6px 0">${safe(designId)}</td>
+        <td style="padding:6px 0">${safe(designId, "chưa lưu")}</td>
       </tr>
     </table>
 
@@ -138,12 +142,12 @@ function buildCustomerHtml({
   </div>`;
 }
 
-// Xác nhận thanh toán & gửi mail (xưởng + khách)
+// ===== (2) Xác nhận thanh toán & gửi mail =====
 router.post("/confirm", async (req, res) => {
   try {
     const {
       paymentId, vnp_ResponseCode, transactionId, designId, userId, email,
-      // NEW: nhận thêm các trường cho email khách
+      // thêm trường cho email khách:
       colorHex, previewFrontUrl, previewBackUrl, userAssetUrl,
     } = req.body || {};
     if (!paymentId) return res.status(400).json({ error: "Missing paymentId" });
@@ -165,7 +169,7 @@ router.post("/confirm", async (req, res) => {
       `);
 
     if (status === "success") {
-      // Gửi cho xưởng (như cũ)
+      // Gửi cho xưởng
       const factoryTo = process.env.FACTORY_EMAIL;
       if (factoryTo) {
         const factoryHtml = `
@@ -185,7 +189,7 @@ router.post("/confirm", async (req, res) => {
         console.error("[payment confirm] FACTORY_EMAIL is not configured");
       }
 
-      // Gửi cho khách — thêm ảnh & thông tin đầy đủ
+      // Gửi cho khách (đủ ảnh/chi tiết)
       if (email) {
         const html = buildCustomerHtml({
           paymentId, transactionId, designId, status,
@@ -194,7 +198,7 @@ router.post("/confirm", async (req, res) => {
           previewBackUrl: previewBackUrl || null,
           userAssetUrl: userAssetUrl || null,
         });
-        // Không await để phản hồi nhanh
+        // không await để phản hồi nhanh
         sendMail({
           to: email,
           subject: `Xác nhận thanh toán thành công – Stylesnap (#${paymentId})`,
@@ -210,10 +214,14 @@ router.post("/confirm", async (req, res) => {
   }
 });
 
-// (Tùy dự án bạn) API check trạng thái
+// ===== (3) Kiểm tra trạng thái =====
 router.get("/check", async (req, res) => {
   const { designId, userId } = req.query;
-  if (!designId || !userId) return res.json({ status: "not_paid" });
+
+  if (!designId || !userId) {
+    return res.json({ status: "not_paid" });
+  }
+
   try {
     const pool = await getPool();
     const result = await pool
@@ -226,7 +234,10 @@ router.get("/check", async (req, res) => {
         WHERE user_id = @user_id AND design_id = @design_id
         ORDER BY created_at DESC
       `);
-    if (!result.recordset.length) return res.json({ status: "not_paid" });
+
+    if (!result.recordset.length) {
+      return res.json({ status: "not_paid" });
+    }
     const s = result.recordset[0].status || "not_paid";
     return res.json({ status: s === "success" ? "success" : "not_paid" });
   } catch (err) {
