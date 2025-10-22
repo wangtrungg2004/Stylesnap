@@ -258,6 +258,23 @@ const Customizer = () => {
 
   useEffect(() => { state.intro = false; }, []);
 
+  /** ====== NEW: chỉ cho thanh toán sau khi đã lưu thiết kế ====== */
+  const canCheckout = !!(snap?.lastSavedDesign && (snap.lastSavedDesign.previewFrontUrl || snap.lastSavedDesign.previewBackUrl));
+  const handleCheckoutClick = () => {
+    if (!canCheckout) {
+      setNotice({
+        visible: true,
+        kind: 'error',
+        title: 'Vui lòng lưu thiết kế',
+        message: 'Bạn cần bấm “Lưu thiết kế” để chụp ảnh xem trước trước khi thanh toán.',
+      });
+      // gợi ý mở lại tour nhấn vào Lưu thiết kế (tùy chọn)
+      try { localStorage.setItem('tour_customizer_force','1'); } catch {}
+      return;
+    }
+    nav('/checkout');
+  };
+
   /* -------------------- UNDO / REDO -------------------- */
   const takeSnapshot = () => ({
     color: state.color,
@@ -446,7 +463,8 @@ const Customizer = () => {
     { selector: '[data-tour="filters"]',        title: 'Bật/tắt lớp',       content: 'Logo trước/sau, chữ trước/sau, phủ toàn áo.',              placement: 'top' },
     { selector: '[data-tour="undo-area"]',      title: 'Hoàn tác/Làm lại',  content: 'Sai thì Undo, muốn quay lại thì Redo. Trạng thái lưu hiện ở đây.', placement: 'right' },
     { selector: '[data-tour="save-btn"]',       title: 'Lưu thiết kế',      content: 'Chụp mặt trước/sau + upload ảnh khách lên kho (Supabase).', placement: 'top' },
-    { selector: '[data-tour="checkout-btn"]',   title: 'Thanh toán',        content: 'Điền thông tin, chọn COD/QR. Email đơn có thể đính kèm 3 ảnh.', placement: 'top' },
+    // cập nhật: phải lưu trước khi thanh toán
+    { selector: '[data-tour="checkout-btn"]',   title: 'Thanh toán',        content: 'Bạn cần bấm “Lưu thiết kế” trước để kích hoạt nút này. Sau đó điền thông tin và chọn COD/QR.', placement: 'top' },
   ];
 
   return (
@@ -534,12 +552,20 @@ const Customizer = () => {
             />
           </span>
 
-          <span data-tour="checkout-btn">
+          <span
+            data-tour="checkout-btn"
+            title={canCheckout ? '' : 'Bạn cần lưu thiết kế trước khi thanh toán'}
+          >
             <CustomButton
               type="filled"
               title="Thanh Toán"
-              handleClick={() => nav('/checkout')}
-              customStyles="w-fit px-4 py-2 text-sm font-semibold rounded-lg bg-green-600 text-white"
+              handleClick={handleCheckoutClick}
+              customStyles={
+                'w-fit px-4 py-2 text-sm font-semibold rounded-lg ' +
+                (canCheckout
+                  ? 'bg-green-600 hover:bg-green-700 text-white'
+                  : 'bg-gray-300 text-gray-500 cursor-not-allowed')
+              }
             />
           </span>
         </motion.div>
