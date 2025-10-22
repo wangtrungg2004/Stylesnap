@@ -11,10 +11,13 @@ export default function PaymentReturn() {
     const code = params.get("vnp_ResponseCode");
     const txn = params.get("vnp_TransactionNo");
 
-    // Lấy email đã lưu tạm ở Checkout (nếu có)
+    // Đọc toàn bộ context checkout đã lưu tạm
     let buyerEmail = null;
+    let ctx = null;
     try {
       buyerEmail = localStorage.getItem("stylesnap_checkout_email");
+      const raw = localStorage.getItem("stylesnap_checkout_ctx");
+      if (raw) ctx = JSON.parse(raw);
     } catch {}
 
     axios.post("/api/payment/confirm", {
@@ -22,14 +25,24 @@ export default function PaymentReturn() {
       designId,
       vnp_ResponseCode: code,
       transactionId: txn,
-      email: buyerEmail || undefined, // NEW
+      email: (ctx?.email || buyerEmail) || undefined,
+      // NEW: kèm thông tin cho email khách
+      colorHex: ctx?.colorHex || null,
+      previewFrontUrl: ctx?.previewFrontUrl || null,
+      previewBackUrl: ctx?.previewBackUrl || null,
+      userAssetUrl: ctx?.userAssetUrl || null,
     }).then(res => {
       if (res.data.status === "success") {
-        alert("Thanh toán thành công! Bạn có thể tải thiết kế.");
-        try { localStorage.removeItem("stylesnap_checkout_email"); } catch {}
+        alert("Thanh toán thành công! Email xác nhận đã được gửi.");
+        try {
+          localStorage.removeItem("stylesnap_checkout_email");
+          localStorage.removeItem("stylesnap_checkout_ctx");
+        } catch {}
       } else {
         alert("Thanh toán thất bại!");
       }
+    }).catch(() => {
+      alert("Có lỗi khi xác nhận thanh toán.");
     });
   }, []);
 
