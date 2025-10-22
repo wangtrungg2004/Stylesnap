@@ -1,4 +1,3 @@
-// src/pages/CheckoutPage.jsx
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import state from "../store";
@@ -48,24 +47,35 @@ export default function CheckoutPage() {
 
     setPayNotice({ visible:true, kind:"pending", title:"Đang tạo đơn…", message: method==="qr" ? "Sẽ hiển thị hướng dẫn thanh toán." : "" });
 
-    // NEW: nếu chọn QR và có email, lưu tạm để PaymentReturn gửi mail xác nhận sau khi cổng trả về
-    if (method === "qr" && form.email) {
-      try { localStorage.setItem("stylesnap_checkout_email", form.email); } catch {}
-    }
-
-    // Lấy 3 ảnh (nếu có) từ lần “Lưu thiết kế” gần nhất – KHÔNG BẮT BUỘC
+    // Lấy thông tin thiết kế đã lưu gần nhất (nếu có)
     const sd = state.lastSavedDesign || {};
     const payload = {
       ...form,
       method,
-      // thông tin để đính kèm ảnh vào email
       previewFrontUrl: sd.previewFrontUrl || null,
       previewBackUrl:  sd.previewBackUrl  || null,
       userAssetUrl:    Array.isArray(sd.assets) && sd.assets[0]?.url ? sd.assets[0].url : null,
       colorHex: state.color || null,
-      // nếu bạn vẫn muốn lưu quan hệ với bản thiết kế thì gửi kèm id (có cũng được, không có cũng không sao)
       designId: sd.designId || null,
     };
+
+    // NEW: nếu chọn QR -> lưu cả context vào localStorage để PaymentReturn gửi mail khách có ảnh/chi tiết
+    if (method === "qr") {
+      try {
+        localStorage.setItem("stylesnap_checkout_email", form.email || "");
+        localStorage.setItem(
+          "stylesnap_checkout_ctx",
+          JSON.stringify({
+            email: form.email || "",
+            colorHex: payload.colorHex || null,
+            previewFrontUrl: payload.previewFrontUrl || null,
+            previewBackUrl: payload.previewBackUrl || null,
+            userAssetUrl: payload.userAssetUrl || null,
+            designId: payload.designId || null,
+          })
+        );
+      } catch {}
+    }
 
     try {
       const resp = await createOrder(payload);
@@ -77,9 +87,10 @@ export default function CheckoutPage() {
         message: resp?.orderNo ? `Mã đơn ${resp.orderNo}` : (method === "qr" ? "Vui lòng quét mã QR để hoàn tất" : "")
       });
 
-      // Không còn khoá theo canCheckout nữa; có thể dọn dẹp state tuỳ ý
-      state.lastSavedDesign = null;
+      // Tuỳ bạn có muốn dọn lastSavedDesign không
+      // state.lastSavedDesign = null;
 
+      // Điều hướng nhẹ nhàng (tuỳ flow của bạn)
       setTimeout(() => nav("/home"), 1200);
     } catch (e) {
       console.error(e);
@@ -100,7 +111,7 @@ export default function CheckoutPage() {
         <div className="flex flex-col gap-3">
           <input type="text" name="name" placeholder="Họ và tên" value={form.name} onChange={handleChange} className="border rounded px-3 py-2" />
           <input type="text" name="phone" placeholder="Số điện thoại" value={form.phone} onChange={handleChange} className="border rounded px-3 py-2" />
-          <input type="email" name="email" placeholder="Email (không bắt buộc)" value={form.email} onChange={handleChange} className="border rounded px-3 py-2" />
+          <input type="email" name="email" placeholder="Email (để nhận xác nhận thanh toán)" value={form.email} onChange={handleChange} className="border rounded px-3 py-2" />
           <textarea name="address" placeholder="Địa chỉ giao hàng" value={form.address} onChange={handleChange} className="border rounded px-3 py-2" />
         </div>
       </div>
