@@ -3,7 +3,7 @@ import crypto from "crypto";
 import moment from "moment";
 import sql from "mssql";
 import { getPool } from "../db.js";
-import { sendMail } from "../utils/mailer.js"; // <-- thêm import gửi mail
+import { sendMail } from "../utils/mailer.js";
 
 const router = express.Router();
 
@@ -17,7 +17,24 @@ function getClientIp(req) {
   );
 }
 
-// ===== (1) Tạo thanh toán (VNPay) =====
+// ---- Format tiền VND an toàn trên server
+const vnd = (n) => {
+  const num = Number(n) || 0;
+  try {
+    return num.toLocaleString("vi-VN", { style: "currency", currency: "VND" });
+  } catch {
+    // fallback khi thiếu ICU
+    return `${num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")} ₫`;
+  }
+};
+
+// Map chất liệu từ mã → nhãn hiển thị
+const MATERIAL_LABELS = {
+  cotton100: "Cotton 100%",
+  cottonBlend: "Cotton pha",
+};
+
+// (1) Tạo thanh toán (VNPay) – giữ nguyên
 router.get("/create", async (req, res) => {
   try {
     const { designId, userId } = req.query;
@@ -91,12 +108,14 @@ router.get("/create", async (req, res) => {
   }
 });
 
-// ===== helper: HTML cho mail khách (đủ ảnh/chi tiết) =====
+// ---- HTML email cho KH: thêm Số lượng / Chất liệu / Tổng tiền
 function buildCustomerHtml({
   paymentId, transactionId, designId, status,
   colorHex, previewFrontUrl, previewBackUrl, userAssetUrl,
+  // mới thêm
+  quantity, productMaterial, appliedPricing, unitPrice, totalRetail, totalWholesale, chargeTotal,
 }) {
-  const safe = (v, fb = "(không có)") => (v ? String(v) : fb);
+  const safe = (v, fb = "(không có)") => (v === 0 ? "0" : (v ? String(v) : fb));
   const imgBox = (url, label) => {
     if (!url) return `<div style="font-size:13px;color:#666">${label}: (không có)</div>`;
     const esc = String(url);
@@ -112,6 +131,8 @@ function buildCustomerHtml({
   const colorCell = colorHex
     ? `<span style="display:inline-block;width:12px;height:12px;border:1px solid #ccc;border-radius:2px;background:${colorHex};vertical-align:middle;margin-right:6px"></span> ${colorHex}`
     : "(không có)";
+  const matLabel = MATERIAL_LABELS[productMaterial] || safe(productMaterial);
+  const appliedLabel = appliedPricing === "wholesale" ? "Sỉ" : "Lẻ";
 
   return `
   <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6;color:#111">
@@ -138,17 +159,51 @@ function buildCustomerHtml({
       ${imgBox(userAssetUrl, "Upload")}
     </div>
 
+    <h3 style="margin:16px 0 8px">Sản phẩm</h3>
+    <table style="border-collapse:collapse;border-spacing:0">
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#555">Chất liệu</td>
+        <td style="padding:6px 0">${safe(matLabel)}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#555">Số lượng</td>
+        <td style="padding:6px 0">${safe(quantity)}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#555">Loại giá áp dụng</td>
+        <td style="padding:6px 0">${appliedLabel}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#555">Đơn giá áp dụng</td>
+        <td style="padding:6px 0">${vnd(unitPrice)}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#555">Tổng tiền lẻ</td>
+        <td style="padding:6px 0">${vnd(totalRetail)}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#555">Tổng tiền sỉ</td>
+        <td style="padding:6px 0">${vnd(totalWholesale)}</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 12px 6px 0;color:#555"><b>Tổng tiền phải trả</b></td>
+        <td style="padding:6px 0"><b>${vnd(chargeTotal)}</b></td>
+      </tr>
+    </table>
+
     <p style="margin-top:16px;color:#444">Nếu ảnh không hiển thị, hãy bấm vào từng mục để mở trong trình duyệt.</p>
   </div>`;
 }
 
-// ===== (2) Xác nhận thanh toán & gửi mail =====
+// (2) Xác nhận thanh toán & gửi mail
 router.post("/confirm", async (req, res) => {
   try {
     const {
       paymentId, vnp_ResponseCode, transactionId, designId, userId, email,
-      // thêm trường cho email khách:
+      // context email khách (đã lưu bên FE/Checkout → PaymentReturn gửi kèm)
       colorHex, previewFrontUrl, previewBackUrl, userAssetUrl,
+      // ---- mới thêm cho sản phẩm & giá
+      quantity, productMaterial, appliedPricing, unitPrice, totalRetail, totalWholesale, chargeTotal,
     } = req.body || {};
     if (!paymentId) return res.status(400).json({ error: "Missing paymentId" });
 
@@ -169,9 +224,10 @@ router.post("/confirm", async (req, res) => {
       `);
 
     if (status === "success") {
-      // Gửi cho xưởng
+      // ---- Gửi cho xưởng (thêm Số lượng/Chất liệu/Tổng tiền)
       const factoryTo = process.env.FACTORY_EMAIL;
       if (factoryTo) {
+        const matLabel = MATERIAL_LABELS[productMaterial] || productMaterial || "(không có)";
         const factoryHtml = `
           <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6">
             <h2>Thanh toán thành công</h2>
@@ -179,6 +235,22 @@ router.post("/confirm", async (req, res) => {
             <p><b>Mã giao dịch (cổng):</b> ${transactionId || "-"}</p>
             <p><b>Design ID:</b> ${designId || "-"}</p>
             <p><b>Trạng thái:</b> ${status}</p>
+
+            <h3 style="margin:16px 0 8px">Sản phẩm</h3>
+            <table style="border-collapse:collapse;border-spacing:0">
+              <tr>
+                <td style="padding:6px 12px 6px 0;color:#555">Chất liệu</td>
+                <td style="padding:6px 0">${matLabel}</td>
+              </tr>
+              <tr>
+                <td style="padding:6px 12px 6px 0;color:#555">Số lượng</td>
+                <td style="padding:6px 0">${quantity ?? "(không có)"}</td>
+              </tr>
+              <tr>
+                <td style="padding:6px 12px 6px 0;color:#555"><b>Tổng tiền phải trả</b></td>
+                <td style="padding:6px 0"><b>${vnd(chargeTotal)}</b></td>
+              </tr>
+            </table>
           </div>`;
         try {
           await sendMail({ to: factoryTo, subject: `[PAID] Payment #${paymentId} thành công`, html: factoryHtml });
@@ -189,7 +261,7 @@ router.post("/confirm", async (req, res) => {
         console.error("[payment confirm] FACTORY_EMAIL is not configured");
       }
 
-      // Gửi cho khách (đủ ảnh/chi tiết)
+      // ---- Gửi cho khách (đủ ảnh/chi tiết + sản phẩm/giá)
       if (email) {
         const html = buildCustomerHtml({
           paymentId, transactionId, designId, status,
@@ -197,6 +269,14 @@ router.post("/confirm", async (req, res) => {
           previewFrontUrl: previewFrontUrl || null,
           previewBackUrl: previewBackUrl || null,
           userAssetUrl: userAssetUrl || null,
+          // sản phẩm & giá
+          quantity: Number(quantity) || null,
+          productMaterial: productMaterial || null,
+          appliedPricing: appliedPricing || null,
+          unitPrice: Number(unitPrice) || null,
+          totalRetail: Number(totalRetail) || null,
+          totalWholesale: Number(totalWholesale) || null,
+          chargeTotal: Number(chargeTotal) || null,
         });
         // không await để phản hồi nhanh
         sendMail({
@@ -214,7 +294,7 @@ router.post("/confirm", async (req, res) => {
   }
 });
 
-// ===== (3) Kiểm tra trạng thái =====
+// (3) Kiểm tra trạng thái – giữ nguyên
 router.get("/check", async (req, res) => {
   const { designId, userId } = req.query;
 
