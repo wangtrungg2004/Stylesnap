@@ -1,7 +1,28 @@
 // src/pages/CheckoutPage.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import state from "../store";
+
+/** ===== Thông tin tài khoản nhận khi chuyển khoản QR ===== */
+const BANK = {
+  accountName: "CTY TNHH ABC",
+  accountNumber: "0123456789",
+  bankName: "Vietcombank - CN HCM",
+  qrImage: "/qrcode.jpg", // ảnh QR hiển thị trên trang
+};
+
+/** ===== Pricing config (đổi tùy ý) ===== */
+const PRICING = {
+  retailUnit: 159000,        // VND/chiếc (lẻ)
+  wholesaleUnit: 129000,     // VND/chiếc (sỉ)
+  wholesaleThreshold: 10,    // Sỉ từ số lượng này trở lên
+  materials: [
+    { value: "cotton100",  label: "Cotton 100%" },
+    { value: "cottonBlend", label: "Cotton pha" },
+  ],
+};
+
+const vnd = (n) => (Number(n) || 0).toLocaleString("vi-VN", { style: "currency", currency: "VND" });
 
 function Notice({ kind = "pending", title, message }) {
   const color =
@@ -22,70 +43,24 @@ function Notice({ kind = "pending", title, message }) {
   );
 }
 
-/** ===== Pricing config (có thể chỉnh) ===== */
-const PRICING = {
-  retailUnit: 159000,        // VND/chiếc (lẻ)
-  wholesaleUnit: 129000,     // VND/chiếc (sỉ)
-  wholesaleThreshold: 10,    // Sỉ từ số lượng này trở lên
-  materials: [
-    { value: "cotton100",  label: "Cotton 100%" },
-    { value: "cottonBlend", label: "Cotton pha" },
-  ],
-};
-
-const vnd = (n) => (Number(n) || 0).toLocaleString("vi-VN", { style: "currency", currency: "VND" });
-
-/** ====== Stepper Input cho Số lượng ======
- * - Cho phép xoá trắng và gõ tay (input type="text")
- * - Nút – / + để giảm/tăng
- * - Chuẩn hoá về >=1 khi blur hay khi bấm nút
- */
+/** ===== Stepper số lượng ===== */
 function QtyStepper({ value, min = 1, onChangeNumber }) {
   const [raw, setRaw] = useState(String(value ?? min));
+  useEffect(() => { setRaw(String(value ?? "")); }, [value]);
 
-  useEffect(() => {
-    setRaw(String(value ?? ""));
-  }, [value]);
-
-  const clampToMin = (n) => Math.max(min, n || min);
-
+  const clamp = (n) => Math.max(min, n || min);
   const applyFromRaw = () => {
     const parsed = parseInt(raw.replace(/[^\d]/g, ""), 10);
-    const next = isNaN(parsed) ? min : clampToMin(parsed);
-    onChangeNumber(next);
+    onChangeNumber(isNaN(parsed) ? min : clamp(parsed));
   };
-
-  const dec = () => onChangeNumber(clampToMin((Number(value) || min) - 1));
-  const inc = () => onChangeNumber(clampToMin((Number(value) || min) + 1));
-
   return (
     <div className="inline-flex items-stretch rounded-lg ring-1 ring-gray-300 overflow-hidden">
-      <button
-        type="button"
-        onClick={dec}
-        aria-label="Giảm số lượng"
-        className="px-3 select-none hover:bg-gray-100 active:bg-gray-200"
-      >
-        –
-      </button>
-      <input
-        type="text"
-        inputMode="numeric"
-        aria-label="Số lượng áo"
-        placeholder="1"
-        value={raw}
-        onChange={(e) => setRaw(e.target.value)}
-        onBlur={applyFromRaw}
-        className="w-24 text-center outline-none px-2"
-      />
-      <button
-        type="button"
-        onClick={inc}
-        aria-label="Tăng số lượng"
-        className="px-3 select-none hover:bg-gray-100 active:bg-gray-200"
-      >
-        +
-      </button>
+      <button type="button" onClick={() => onChangeNumber(clamp((Number(value)||min)-1))}
+        className="px-3 select-none hover:bg-gray-100 active:bg-gray-200" aria-label="Giảm">–</button>
+      <input type="text" inputMode="numeric" value={raw} placeholder="1" onChange={(e)=>setRaw(e.target.value)}
+        onBlur={applyFromRaw} aria-label="Số lượng" className="w-24 text-center outline-none px-2" />
+      <button type="button" onClick={() => onChangeNumber(clamp((Number(value)||min)+1))}
+        className="px-3 select-none hover:bg-gray-100 active:bg-gray-200" aria-label="Tăng">+</button>
     </div>
   );
 }
@@ -95,10 +70,14 @@ export default function CheckoutPage() {
   const [form, setForm] = useState({ name: "", phone: "", email: "", address: "" });
   const [product, setProduct] = useState({ material: PRICING.materials[0].value, qty: 1 });
   const [payNotice, setPayNotice] = useState({ visible:false, kind:"pending", title:"", message:"" });
+
+  // QR proof
+  const [qrProofFile, setQrProofFile] = useState(null);
+  const [qrProofPreview, setQrProofPreview] = useState("");
+
   const nav = useNavigate();
 
   const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
-
   const setQty = (n) => setProduct((p) => ({ ...p, qty: n }));
 
   const priceCalc = useMemo(() => {
@@ -122,24 +101,29 @@ export default function CheckoutPage() {
     try { return await res.json(); } catch { return { ok:true }; }
   }
 
+  // Upload ảnh xác nhận lên Supabase (prefix proofs)
+  async function uploadProofToSupabase(file) {
+    const fd = new FormData();
+    fd.append("file", file, file.name || `qr-proof-${Date.now()}.jpg`);
+    const res = await fetch("/api/uploads/sb?dir=proofs", { method: "POST", body: fd });
+    const text = await res.text();
+    let json = null; try { json = JSON.parse(text); } catch {}
+    if (!res.ok || !json) throw new Error("Upload proof failed");
+    return json.publicUrl || json.signedUrl;
+  }
+
   const validateRequired = () => {
     const nameOk = !!form.name?.trim();
     const phoneOk = !!form.phone?.trim();
     const addrOk = !!form.address?.trim();
     const qtyOk = Number(product.qty) >= 1;
-
     if (!nameOk || !phoneOk || !addrOk || !qtyOk) {
-      let miss = [];
+      const miss = [];
       if (!nameOk) miss.push("Họ tên");
       if (!phoneOk) miss.push("Số điện thoại");
       if (!addrOk) miss.push("Địa chỉ");
       if (!qtyOk) miss.push("Số lượng áo");
-      setPayNotice({
-        visible: true,
-        kind: "error",
-        title: "Thiếu thông tin bắt buộc",
-        message: `Vui lòng nhập: ${miss.join(", ")}.`,
-      });
+      setPayNotice({ visible:true, kind:"error", title:"Thiếu thông tin bắt buộc", message:`Vui lòng nhập: ${miss.join(", ")}.` });
       return false;
     }
     return true;
@@ -147,28 +131,27 @@ export default function CheckoutPage() {
 
   const handleConfirm = async () => {
     if (!validateRequired()) return;
+    if (!method) return setPayNotice({ visible:true, kind:"error", title:"Chưa chọn phương thức", message:"Chọn COD hoặc QR." });
 
-    if (!method) {
+    // Nếu chọn QR → bắt buộc ảnh xác nhận
+    if (method === "qr" && !qrProofFile) {
       return setPayNotice({
         visible:true, kind:"error",
-        title:"Chưa chọn phương thức", message:"Chọn COD hoặc QR."
+        title:"Thiếu ảnh xác nhận",
+        message:"Vui lòng tải ảnh/bằng chứng chuyển khoản trước khi gửi đơn.",
       });
     }
 
-    setPayNotice({
-      visible:true, kind:"pending",
-      title:"Đang tạo đơn…",
-      message: method==="qr" ? "Sẽ hiển thị hướng dẫn thanh toán." : ""
-    });
+    setPayNotice({ visible:true, kind:"pending", title:"Đang tạo đơn…", message: method==="qr" ? "Đang xử lý ảnh xác nhận..." : "" });
 
-    // Lấy thông tin thiết kế đã lưu gần nhất (nếu có)
+    // Lấy thông tin thiết kế (nếu có)
     const sd = state.lastSavedDesign || {};
 
-    // Payload gửi order (thêm product + pricing breakdown)
+    // Payload cơ bản
     const payload = {
       ...form,
       method,
-      // design context
+      // design
       previewFrontUrl: sd.previewFrontUrl || null,
       previewBackUrl:  sd.previewBackUrl  || null,
       userAssetUrl:    Array.isArray(sd.assets) && sd.assets[0]?.url ? sd.assets[0].url : null,
@@ -189,45 +172,30 @@ export default function CheckoutPage() {
       },
     };
 
-    // Nếu chọn QR → lưu context để PaymentReturn gửi kèm sau thanh toán
-    if (method === "qr") {
+    // Nếu QR → upload ảnh proof, gắn thêm vào payload
+    if (method === "qr" && qrProofFile) {
       try {
-        localStorage.setItem("stylesnap_checkout_email", form.email || "");
-        localStorage.setItem(
-          "stylesnap_checkout_ctx",
-          JSON.stringify({
-            email: form.email || "",
-            colorHex: payload.colorHex || null,
-            previewFrontUrl: payload.previewFrontUrl || null,
-            previewBackUrl: payload.previewBackUrl || null,
-            userAssetUrl: payload.userAssetUrl || null,
-            designId: payload.designId || null,
-            // product context
-            productMaterial: payload.material,
-            quantity: payload.quantity,
-            unitPrice: payload.pricing.unitPrice,
-            totalRetail: payload.pricing.totalRetail,
-            totalWholesale: payload.pricing.totalWholesale,
-            appliedPricing: payload.pricing.applied,
-            chargeTotal: payload.pricing.chargeTotal,
-          })
-        );
-      } catch {}
+        const proofUrl = await uploadProofToSupabase(qrProofFile);
+        payload.qrProofUrl = proofUrl;
+        payload.bank = BANK; // để email hiển thị thông tin TK nhận
+      } catch (e) {
+        return setPayNotice({ visible:true, kind:"error", title:"Upload ảnh xác nhận thất bại", message:"Thử lại hoặc gửi cách khác." });
+      }
+    }
+
+    // GUARD: nếu KH không chọn QR thì đảm bảo không gửi proof/bank
+    if (method !== "qr") {
+      delete payload.qrProofUrl;
+      delete payload.bank;
     }
 
     try {
       const resp = await createOrder(payload);
-
       setPayNotice({
-        visible:true,
-        kind:"success",
-        title: method === "cod" ? "Đặt hàng COD thành công" : "Tạo yêu cầu thanh toán thành công",
-        message: resp?.orderNo ? `Mã đơn ${resp.orderNo}` : (method === "qr" ? "Vui lòng quét mã QR để hoàn tất" : "")
+        visible:true, kind:"success",
+        title: method === "cod" ? "Đặt hàng COD thành công" : "Gửi đơn (QR) thành công",
+        message: resp?.orderNo ? `Mã đơn ${resp.orderNo}` : "",
       });
-
-      // (tuỳ ý) dọn dẹp
-      // state.lastSavedDesign = null;
-
       setTimeout(() => nav("/home"), 1200);
     } catch (e) {
       console.error(e);
@@ -243,58 +211,32 @@ export default function CheckoutPage() {
 
       <h1 className="text-2xl font-bold mb-6">Thanh toán đơn hàng</h1>
 
-      {/* Thông tin giao hàng (bắt buộc) */}
+      {/* Thông tin giao hàng */}
       <div className="w-full max-w-md bg-white p-6 rounded-lg shadow mb-6">
         <h2 className="text-lg font-semibold mb-4">Thông tin giao hàng</h2>
         <div className="flex flex-col gap-3">
           <label className="text-sm font-medium">
             Họ và tên <span className="text-red-600">*</span>
-            <input
-              required
-              type="text"
-              name="name"
-              placeholder="VD: Nguyễn Văn A"
-              value={form.name}
-              onChange={handleChange}
-              className="mt-1 w-full border rounded px-3 py-2"
-            />
+            <input required type="text" name="name" value={form.name} onChange={handleChange}
+              className="mt-1 w-full border rounded px-3 py-2" placeholder="VD: Nguyễn Văn A" />
           </label>
 
           <label className="text-sm font-medium">
             Số điện thoại <span className="text-red-600">*</span>
-            <input
-              required
-              type="tel"
-              name="phone"
-              placeholder="VD: 09xxxxxxxx"
-              value={form.phone}
-              onChange={handleChange}
-              className="mt-1 w-full border rounded px-3 py-2"
-            />
+            <input required type="tel" name="phone" value={form.phone} onChange={handleChange}
+              className="mt-1 w-full border rounded px-3 py-2" placeholder="VD: 09xxxxxxxx" />
           </label>
 
           <label className="text-sm font-medium">
             Email (nhận xác nhận thanh toán)
-            <input
-              type="email"
-              name="email"
-              placeholder="(không bắt buộc)"
-              value={form.email}
-              onChange={handleChange}
-              className="mt-1 w-full border rounded px-3 py-2"
-            />
+            <input type="email" name="email" value={form.email} onChange={handleChange}
+              className="mt-1 w-full border rounded px-3 py-2" placeholder="(không bắt buộc)" />
           </label>
 
           <label className="text-sm font-medium">
             Địa chỉ giao hàng <span className="text-red-600">*</span>
-            <textarea
-              required
-              name="address"
-              placeholder="Số nhà/đường, phường/xã, quận/huyện, tỉnh/thành phố"
-              value={form.address}
-              onChange={handleChange}
-              className="mt-1 w-full border rounded px-3 py-2"
-            />
+            <textarea required name="address" value={form.address} onChange={handleChange}
+              className="mt-1 w-full border rounded px-3 py-2" placeholder="Số nhà/đường, phường/xã, quận/huyện, tỉnh/thành phố" />
           </label>
         </div>
       </div>
@@ -303,54 +245,28 @@ export default function CheckoutPage() {
       <div className="w-full max-w-md bg-white p-6 rounded-lg shadow mb-6">
         <h2 className="text-lg font-semibold mb-4">Sản phẩm</h2>
 
-        {/* Chất liệu */}
         <label className="block text-sm font-medium mb-1">Chất liệu áo</label>
-        <select
-          className="w-full border rounded px-3 py-2 mb-4"
-          value={product.material}
-          onChange={(e) => setProduct((p) => ({ ...p, material: e.target.value }))}
-        >
-          {PRICING.materials.map((m) => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
+        <select className="w-full border rounded px-3 py-2 mb-4"
+          value={product.material} onChange={(e)=>setProduct(p=>({ ...p, material: e.target.value }))}>
+          {PRICING.materials.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
         </select>
 
-        {/* Số lượng (bắt buộc) */}
-        <label className="block text-sm font-medium mb-1">
-          Số lượng áo <span className="text-red-600">*</span>
-        </label>
+        <label className="block text-sm font-medium mb-1">Số lượng áo <span className="text-red-600">*</span></label>
         <QtyStepper value={product.qty} min={1} onChangeNumber={setQty} />
 
-        {/* Bảng giá */}
-        <div className="mt-5 p-4 rounded-lg border bg-gray-50">
-          <div className="text-sm text-gray-700">
-            <div className="flex justify-between">
-              <span>Đơn giá lẻ</span>
-              <strong>{vnd(PRICING.retailUnit)}</strong>
+        <div className="mt-5 p-4 rounded-lg border bg-gray-50 text-sm text-gray-700">
+          <div className="flex justify-between"><span>Đơn giá lẻ</span><strong>{vnd(PRICING.retailUnit)}</strong></div>
+          <div className="flex justify-between"><span>Đơn giá sỉ (≥ {PRICING.wholesaleThreshold})</span><strong>{vnd(PRICING.wholesaleUnit)}</strong></div>
+          <hr className="my-3" />
+          <div className="flex justify-between"><span>Tổng tiền lẻ (x{priceCalc.qty})</span><strong>{vnd(priceCalc.totalRetail)}</strong></div>
+          <div className="flex justify-between"><span>Tổng tiền sỉ (x{priceCalc.qty})</span><strong>{vnd(priceCalc.totalWholesale)}</strong></div>
+          <div className="mt-3 px-3 py-2 rounded-md bg-white ring-1 ring-gray-200">
+            <div className="text-xs text-gray-600 mb-1">Áp dụng</div>
+            <div className="flex items-center justify-between">
+              <span className="font-medium">{priceCalc.useWholesale ? `Sỉ (≥ ${PRICING.wholesaleThreshold})` : "Lẻ"}</span>
+              <span className="text-gray-600">Số tiền tạm tính</span>
             </div>
-            <div className="flex justify-between">
-              <span>Đơn giá sỉ (≥ {PRICING.wholesaleThreshold})</span>
-              <strong>{vnd(PRICING.wholesaleUnit)}</strong>
-            </div>
-            <hr className="my-3" />
-            <div className="flex justify-between">
-              <span>Tổng tiền lẻ (x{priceCalc.qty})</span>
-              <strong>{vnd(priceCalc.totalRetail)}</strong>
-            </div>
-            <div className="flex justify-between">
-              <span>Tổng tiền sỉ (x{priceCalc.qty})</span>
-              <strong>{vnd(priceCalc.totalWholesale)}</strong>
-            </div>
-            <div className="mt-3 px-3 py-2 rounded-md bg-white ring-1 ring-gray-200">
-              <div className="text-xs text-gray-600 mb-1">Áp dụng</div>
-              <div className="flex items-center justify-between">
-                <span className="font-medium">
-                  {priceCalc.useWholesale ? `Sỉ (≥ ${PRICING.wholesaleThreshold})` : "Lẻ"}
-                </span>
-                <span className="text-gray-600">Số tiền tạm tính</span>
-              </div>
-              <div className="text-right text-lg font-semibold">{vnd(priceCalc.chargeTotal)}</div>
-            </div>
+            <div className="text-right text-lg font-semibold">{vnd(priceCalc.chargeTotal)}</div>
           </div>
         </div>
       </div>
@@ -363,15 +279,34 @@ export default function CheckoutPage() {
             <input type="radio" name="method" value="cod" checked={method === "cod"} onChange={() => setMethod("cod")} /> COD
           </label>
           <label className="flex items-center gap-2">
-            <input type="radio" name="method" value="qr" checked={method === "qr"} onChange={() => setMethod("qr")} /> Quét QR Code
+            <input type="radio" name="method" value="qr" checked={method === "qr"} onChange={() => setMethod("qr")} /> QR chuyển khoản
           </label>
         </div>
 
         {method === "qr" && (
           <div className="mt-4 p-4 border rounded bg-gray-50">
             <p className="mb-2">Quét mã QR sau để thanh toán:</p>
-            {/* Placeholder QR, thay bằng ảnh QR thực tế */}
-            <img src="/qrcode.jpg" alt="QR Code" className="w-48 h-48 mx-auto" />
+            <img src={BANK.qrImage} alt="QR Code" className="w-48 h-48 mx-auto mb-3" />
+            <div className="text-sm text-gray-700 mb-3">
+              <div><b>Chủ TK:</b> {BANK.accountName}</div>
+              <div><b>Số TK:</b> {BANK.accountNumber}</div>
+              <div><b>Ngân hàng:</b> {BANK.bankName}</div>
+            </div>
+
+            <label className="block text-sm font-medium mb-1">
+              Ảnh xác nhận đã chuyển khoản <span className="text-red-600">*</span>
+            </label>
+            <input type="file" accept="image/*"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                setQrProofFile(f || null);
+                setQrProofPreview(f ? URL.createObjectURL(f) : "");
+              }}
+              className="block w-full border rounded px-3 py-2 bg-white"
+            />
+            {qrProofPreview && (
+              <img src={qrProofPreview} alt="Preview proof" className="mt-3 max-h-56 rounded border" />
+            )}
           </div>
         )}
       </div>
