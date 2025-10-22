@@ -1,3 +1,4 @@
+// src/pages/CheckoutPage.jsx
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import state from "../store";
@@ -52,6 +53,7 @@ export default function CheckoutPage() {
     const payload = {
       ...form,
       method,
+      // các URL phục vụ email/đính kèm
       previewFrontUrl: sd.previewFrontUrl || null,
       previewBackUrl:  sd.previewBackUrl  || null,
       userAssetUrl:    Array.isArray(sd.assets) && sd.assets[0]?.url ? sd.assets[0].url : null,
@@ -59,7 +61,7 @@ export default function CheckoutPage() {
       designId: sd.designId || null,
     };
 
-    // NEW: nếu chọn QR -> lưu cả context vào localStorage để PaymentReturn gửi mail khách có ảnh/chi tiết
+    // Nếu chọn QR -> lưu context vào localStorage để /return gửi mail khách đủ thông tin
     if (method === "qr") {
       try {
         localStorage.setItem("stylesnap_checkout_email", form.email || "");
@@ -87,10 +89,9 @@ export default function CheckoutPage() {
         message: resp?.orderNo ? `Mã đơn ${resp.orderNo}` : (method === "qr" ? "Vui lòng quét mã QR để hoàn tất" : "")
       });
 
-      // Tuỳ bạn có muốn dọn lastSavedDesign không
+      // (tuỳ ý) dọn dẹp
       // state.lastSavedDesign = null;
 
-      // Điều hướng nhẹ nhàng (tuỳ flow của bạn)
       setTimeout(() => nav("/home"), 1200);
     } catch (e) {
       console.error(e);
@@ -130,6 +131,7 @@ export default function CheckoutPage() {
         {method === "qr" && (
           <div className="mt-4 p-4 border rounded bg-gray-50">
             <p className="mb-2">Quét mã QR sau để thanh toán:</p>
+            {/* tuỳ bạn render QR thực tế */}
             <img src="/qrcode.jpg" alt="QR Code" className="w-48 h-48 mx-auto" />
           </div>
         )}
