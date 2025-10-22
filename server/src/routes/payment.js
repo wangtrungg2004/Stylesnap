@@ -3,6 +3,7 @@ import crypto from "crypto";
 import moment from "moment";
 import sql from "mssql";
 import { getPool } from "../db.js";
+import { sendMail } from "../utils/mailer.js"; // <-- NEW
 
 const router = express.Router();
 
@@ -62,7 +63,7 @@ router.get("/create", async (req, res) => {
       vnp_Version: "2.1.0",
       vnp_Command: "pay",
       vnp_TmnCode: tmnCode,
-       vnp_SecureHashType: "HmacSHA512",
+      vnp_SecureHashType: "HmacSHA512",
       vnp_Locale: "vn",
       vnp_CurrCode: "VND",
       vnp_TxnRef: orderId,
@@ -98,7 +99,7 @@ router.get("/create", async (req, res) => {
 // ========== 2) Xác nhận thanh toán (VNPay return -> FE -> /confirm) ==========
 router.post("/confirm", async (req, res) => {
   try {
-    const { paymentId, vnp_ResponseCode, transactionId, designId, userId } = req.body || {};
+    const { paymentId, vnp_ResponseCode, transactionId, designId, userId, email } = req.body || {};
     if (!paymentId) return res.status(400).json({ error: "Missing paymentId" });
 
     const status = vnp_ResponseCode === "00" ? "success" : "failed";
@@ -116,6 +117,40 @@ router.post("/confirm", async (req, res) => {
               updated_at = SYSUTCDATETIME()
         WHERE id = @payment_id
       `);
+
+    // NEW: Nếu thanh toán thành công, gửi email cho xưởng + khách
+    if (status === "success") {
+      const factoryTo = process.env.FACTORY_EMAIL;
+      const subjectFactory = `[PAID] Payment #${paymentId} thành công`;
+      const subjectBuyer = `Xác nhận thanh toán thành công – Stylesnap (#${paymentId})`;
+      const html = `
+        <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6">
+          <h2>Thanh toán thành công</h2>
+          <p><b>Payment ID:</b> ${paymentId}</p>
+          <p><b>Mã giao dịch (cổng):</b> ${transactionId || "-"}</p>
+          <p><b>Design ID:</b> ${designId || "-"}</p>
+          <p><b>Trạng thái:</b> ${status}</p>
+        </div>
+      `;
+
+      // gửi cho xưởng (bắt buộc)
+      if (factoryTo) {
+        try {
+          await sendMail({ to: factoryTo, subject: subjectFactory, html });
+        } catch (e) {
+          console.error("[payment confirm] mail to factory failed:", e?.message || e);
+        }
+      } else {
+        console.error("[payment confirm] FACTORY_EMAIL is not configured");
+      }
+
+      // gửi cho khách (nếu có email từ FE)
+      if (email) {
+        // không await để tránh chậm phản hồi
+        sendMail({ to: email, subject: subjectBuyer, html })
+          .catch(e => console.error("[payment confirm] mail to buyer failed:", e?.message || e));
+      }
+    }
 
     return res.json({ status });
   } catch (err) {
