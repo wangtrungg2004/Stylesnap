@@ -3,6 +3,7 @@ import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 're
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSnapshot } from 'valtio';
 import { useNavigate } from 'react-router-dom';
+import ReactGA from 'react-ga4'; // <-- TÍCH HỢP GA: ĐÃ THÊM
 import PolicyNudge from '../components/PolicyNudge';
 
 import Stage from '../components/Stage';
@@ -26,7 +27,7 @@ const FABRIC_COLORS = [
   { key: 'do_do',         label: 'Đỏ đô',        hex: '#8B0000' },
   { key: 'tim_hue',       label: 'Tím Huế',      hex: '#2D133F' },
   { key: 'xanh_com',      label: 'Xanh cốm',     hex: '#B9D55F' },
-  { key: 'xanh_ya',       label: 'Xanh ya',      hex: '#4880C3' },
+  { key: 'xanh_ya',       label: 'Xanh ya',       hex: '#4880C3' },
   { key: 'do',            label: 'Đỏ',           hex: '#9A2B22' },
   { key: 'hong_sen',      label: 'Hồng sen',     hex: '#D55F82' },
   { key: 'vang',          label: 'Vàng',         hex: '#F2D22F' },
@@ -407,6 +408,17 @@ const Customizer = () => {
 
   async function saveCurrentDesign() {
     setNotice({ visible:true, kind:'pending', title:'Đang lưu thiết kế…', message:'' });
+    
+    // === TÍCH HỢP GA: GỬI SỰ KIỆN ===
+    if (import.meta.env.MODE === 'production') {
+      ReactGA.event({
+        category: 'Customizer',
+        action: 'Save_Design',
+        label: snap.color, // Gửi kèm màu áo
+      });
+    }
+    // =================================
+    
     try {
       const frontBlob = await (window.appCapture?.front?.() || null);
       const backBlob  = await (window.appCapture?.back?.()  || null);
@@ -456,15 +468,15 @@ const Customizer = () => {
 
   /* ========== Các bước TOUR ========== */
   const steps = [
-    { selector: '[data-tour="color-tab"]',      title: 'Chọn màu áo',       content: 'Bấm để mở bảng màu. Popover giữ mở cho tới khi bấm lại.', placement: 'right' },
-    { selector: '[data-tour="filepicker-tab"]', title: 'Tải ảnh của bạn',   content: 'Chọn ảnh từ máy để dán lên áo (logo/hoạ tiết).',           placement: 'right' },
-    { selector: '[data-tour="texture-tab"]',    title: 'Hoạ tiết có sẵn',   content: 'Bấm để bật, bấm lại đúng mẫu để tắt.',                     placement: 'right' },
+    { selector: '[data-tour="color-tab"]',       title: 'Chọn màu áo',       content: 'Bấm để mở bảng màu. Popover giữ mở cho tới khi bấm lại.', placement: 'right' },
+    { selector: '[data-tour="filepicker-tab"]', title: 'Tải ảnh của bạn',   content: 'Chọn ảnh từ máy để dán lên áo (logo/hoạ tiết).',         placement: 'right' },
+    { selector: '[data-tour="texture-tab"]',    title: 'Hoạ tiết có sẵn',   content: 'Bấm để bật, bấm lại đúng mẫu để tắt.',                   placement: 'right' },
     { selector: '[data-tour="text-tab"]',       title: 'Thêm chữ',          content: 'Nhập nội dung, chọn font, điều chỉnh vị trí/độ lớn/góc xoay.', placement: 'right' },
-    { selector: '[data-tour="filters"]',        title: 'Bật/tắt lớp',       content: 'Logo trước/sau, chữ trước/sau, phủ toàn áo.',              placement: 'top' },
+    { selector: '[data-tour="filters"]',        title: 'Bật/tắt lớp',       content: 'Logo trước/sau, chữ trước/sau, phủ toàn áo.',                   placement: 'top' },
     { selector: '[data-tour="undo-area"]',      title: 'Hoàn tác/Làm lại',  content: 'Sai thì Undo, muốn quay lại thì Redo. Trạng thái lưu hiện ở đây.', placement: 'right' },
     { selector: '[data-tour="save-btn"]',       title: 'Lưu thiết kế',      content: 'Chụp mặt trước/sau + upload ảnh khách lên kho (Supabase).', placement: 'top' },
     // cập nhật: phải lưu trước khi thanh toán
-    { selector: '[data-tour="checkout-btn"]',   title: 'Thanh toán',        content: 'Bạn cần bấm “Lưu thiết kế” trước để kích hoạt nút này. Sau đó điền thông tin và chọn COD/QR.', placement: 'top' },
+    { selector: '[data-tour="checkout-btn"]',   title: 'Thanh toán',       content: 'Bạn cần bấm “Lưu thiết kế” trước để kích hoạt nút này. Sau đó điền thông tin và chọn COD/QR.', placement: 'top' },
   ];
 
   return (

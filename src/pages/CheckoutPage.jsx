@@ -1,6 +1,7 @@
 // src/pages/CheckoutPage.jsx
 import React, { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import ReactGA from 'react-ga4'; // <-- TÍCH HỢP GA: ĐÃ THÊM
 import state from "../store";
 
 /** ===== Thông tin tài khoản nhận khi chuyển khoản QR ===== */
@@ -142,6 +143,17 @@ export default function CheckoutPage() {
       });
     }
 
+    // === TÍCH HỢP GA: GỬI SỰ KIỆN ===
+    if (import.meta.env.MODE === 'production') {
+      ReactGA.event({
+        category: 'Checkout',
+        action: 'Confirm_Order',
+        label: method, // Gửi phương thức thanh toán (ví dụ: 'cod' hoặc 'qr')
+        value: priceCalc.chargeTotal // Gửi kèm tổng giá trị đơn hàng
+      });
+    }
+    // =================================
+
     setPayNotice({ visible:true, kind:"pending", title:"Đang tạo đơn…", message: method==="qr" ? "Đang xử lý ảnh xác nhận..." : "" });
 
     // Lấy thông tin thiết kế (nếu có)
@@ -167,7 +179,7 @@ export default function CheckoutPage() {
         unitPrice: priceCalc.unitPrice,
         totalRetail: priceCalc.totalRetail,
         totalWholesale: priceCalc.totalWholesale,
-        applied: priceCalc.applied,          // "retail" | "wholesale"
+        applied: priceCalc.applied,      // "retail" | "wholesale"
         chargeTotal: priceCalc.chargeTotal,  // số tiền nên thu theo ngưỡng
       },
     };

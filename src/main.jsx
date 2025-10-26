@@ -2,6 +2,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { createBrowserRouter, RouterProvider, Navigate, useLocation } from 'react-router-dom';
+import ReactGA from 'react-ga4'; // <-- TÍCH HỢP GA: Import
 import './index.css';
 
 import { NotifyProvider } from './store/notify';
@@ -10,11 +11,22 @@ import ToastContainer from './components/ToastContainer';
 import Home from './pages/Home';
 import CustomizePage from './pages/Customizer';
 
-
 import Header from './components/Header';
 import { AuthProvider, useAuth } from './store/auth';
 import CheckoutPage from './pages/CheckoutPage';
-import MyDesigns from './pages/MyDesigns'; // ⬅️ thêm
+import MyDesigns from './pages/MyDesigns'; 
+
+// TÍCH HỢP GA: Import hook theo dõi trang
+import usePageTracking from './hooks/usePageTracking'; 
+
+// === TÍCH HỢP GA: KHỞI TẠO GOOGLE ANALYTICS ===
+// Sử dụng Mã đo lường (Measurement ID) của bạn
+// Chỉ khởi tạo khi ở môi trường production (deploy)
+if (import.meta.env.MODE === 'production') {
+  ReactGA.initialize('G-5WD8D9631M'); // <-- THAY THẾ BẰNG MÃ CỦA BẠN
+  console.log('Google Analytics Initialized');
+}
+// ===============================================
 
 function Protected({ children }) {
   const { user, booting } = useAuth();
@@ -30,12 +42,17 @@ function Protected({ children }) {
   return children;
 }
 
-const AppLayout = ({ children }) => (
-  <div className="min-h-screen bg-white">
-    <Header />
-    {children}
-  </div>
-);
+const AppLayout = ({ children }) => {
+  // TÍCH HỢP GA: Gọi hook theo dõi chuyển trang
+  usePageTracking();
+
+  return (
+    <div className="min-h-screen bg-white">
+      <Header />
+      {children}
+    </div>
+  );
+};
 
 const router = createBrowserRouter([
   { path: '/', element: <AppLayout><Home /></AppLayout> },
@@ -69,10 +86,12 @@ const router = createBrowserRouter([
 ]);
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <NotifyProvider>
-    <AuthProvider>
-      <ToastContainer />
-      <RouterProvider router={router} />
-    </AuthProvider>
-  </NotifyProvider>
+  <React.StrictMode>
+    <NotifyProvider>
+      <AuthProvider>
+        <ToastContainer />
+        <RouterProvider router={router} />
+      </AuthProvider>
+    </NotifyProvider>
+  </React.StrictMode>
 );
