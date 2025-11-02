@@ -14,7 +14,7 @@ const BANK = {
 
 /** ===== Cấu hình giá =====
  * Cotton 100%: cố định 299.000 (không phân sỉ/lẻ)
- * Cotton pha: giữ nguyên lẻ 159.000, sỉ 129.000 từ ngưỡng 10
+ * Cotton pha: lẻ 159.000, sỉ 129.000 từ ngưỡng 10
  */
 const PRICING = {
   BLEND_RETAIL: 159000,
@@ -150,11 +150,11 @@ export default function CheckoutPage() {
         totalRetail: total,
         totalWholesale: total,
         chargeTotal: total,
-        applied: "fixed", // hiển thị như giá cố định
+        applied: "fixed",
       };
     }
 
-    // cottonBlend (giữ logic sỉ/lẻ cũ)
+    // cottonBlend (giữ logic sỉ/lẻ)
     const useWholesale = qty >= PRICING.WHOLESALE_THRESHOLD;
     const unitPrice = useWholesale ? PRICING.BLEND_WHOLESALE : PRICING.BLEND_RETAIL;
     const totalRetail = qty * PRICING.BLEND_RETAIL;
@@ -187,7 +187,6 @@ export default function CheckoutPage() {
   }
 
   // Upload ảnh xác nhận lên Supabase (prefix proofs)
-  // Lưu ý: backend nên trỏ SUPABASE_PROOFS_BUCKET=stylesnap-proofs
   async function uploadProofToSupabase(file) {
     const fd = new FormData();
     fd.append("file", file, file.name || `qr-proof-${Date.now()}.jpg`);
@@ -246,7 +245,7 @@ export default function CheckoutPage() {
       });
     }
 
-    // GA event (nếu bạn muốn giữ)
+    // GA event (tùy chọn)
     if (import.meta.env.MODE === "production") {
       try {
         ReactGA.event({
@@ -265,7 +264,6 @@ export default function CheckoutPage() {
       message: method === "qr" ? "Đang xử lý ảnh xác nhận..." : "",
     });
 
-    // Lấy thông tin thiết kế (nếu có)
     const sd = state.lastSavedDesign || {};
 
     // Payload
@@ -284,7 +282,6 @@ export default function CheckoutPage() {
       size: product.size,
       quantity: priceCalc.qty,
       pricing: {
-        // để email hiển thị rõ
         retailUnit:
           product.material === "cotton100"
             ? PRICING.COTTON100_UNIT
@@ -441,7 +438,7 @@ export default function CheckoutPage() {
           value={product.size}
           onChange={(e) => setProduct((p) => ({ ...p, size: e.target.value }))}
         >
-          {SIZE_OPTIONS.map((s) => (
+          {["S", "M", "L", "XL", "XXL"].map((s) => (
             <option key={s} value={s}>
               {s}
             </option>
@@ -466,8 +463,7 @@ export default function CheckoutPage() {
           </div>
           <div className="flex justify-between">
             <span>
-              Đơn giá sỉ (≥ {PRICING.WHOLESALE_THRESHOLD}
-              )
+              Đơn giá sỉ (≥ {PRICING.WHOLESALE_THRESHOLD})
             </span>
             <strong>
               {product.material === "cotton100"
@@ -534,37 +530,51 @@ export default function CheckoutPage() {
             <p className="mb-2">Quét mã QR sau để thanh toán:</p>
             <img src={BANK.qrImage} alt="QR Code" className="w-48 h-48 mx-auto mb-3" />
             <div className="text-sm text-gray-700 mb-3">
-              <div>
-                <b>Chủ TK:</b> {BANK.accountName}
-              </div>
-              <div>
-                <b>Số TK:</b> {BANK.accountNumber}
-              </div>
-              <div>
-                <b>Ngân hàng:</b> {BANK.bankName}
-              </div>
+              <div><b>Chủ TK:</b> {BANK.accountName}</div>
+              <div><b>Số TK:</b> {BANK.accountNumber}</div>
+              <div><b>Ngân hàng:</b> {BANK.bankName}</div>
             </div>
 
+            {/* ===== Upload ảnh xác nhận (custom label + input sr-only) ===== */}
             <label className="block text-sm font-medium mb-1">
               Ảnh xác nhận đã chuyển khoản <span className="text-red-600">*</span>
             </label>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                setQrProofFile(f || null);
-                setQrProofPreview(f ? URL.createObjectURL(f) : "");
-              }}
-              className="block w-full border rounded px-3 py-2 bg-white"
-            />
-            {qrProofPreview && (
-              <img
-                src={qrProofPreview}
-                alt="Preview proof"
-                className="mt-3 max-h-56 rounded border"
+
+            <div className="mt-2">
+              <input
+                id="qr-proof"
+                type="file"
+                accept="image/*" /* MDN khuyến nghị dùng accept để giới hạn loại tệp */
+                className="sr-only"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  setQrProofFile(f || null);
+                  setQrProofPreview(f ? URL.createObjectURL(f) : "");
+                }}
               />
-            )}
+              <label
+                htmlFor="qr-proof"
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-md ring-1 ring-gray-300 bg-white hover:bg-gray-100 cursor-pointer text-sm font-medium"
+              >
+                📎 Chọn ảnh
+              </label>
+              {qrProofFile && (
+                <span className="ml-2 text-sm text-gray-700 align-middle">
+                  {qrProofFile.name}
+                </span>
+              )}
+              <p className="text-xs text-gray-500 mt-1">
+                Chấp nhận JPEG/PNG. Tối đa 10–25MB tuỳ cấu hình máy chủ.
+              </p>
+
+              {qrProofPreview && (
+                <img
+                  src={qrProofPreview}
+                  alt="Preview proof"
+                  className="mt-3 max-h-56 rounded border"
+                />
+              )}
+            </div>
           </div>
         )}
       </div>
