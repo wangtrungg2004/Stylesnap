@@ -21,4 +21,4 @@ import logo5 from "./logo5.png";
 import logo6 from "./logo6.jpg";
 
 
-export { fileIcon, swatch, download, logoShirt, stylishShirt, logoControls, textIcon, textureLogoPicker, texture1, texture2, texture3, texture4, texture5, logo1, logo2 };
+export { fileIcon, swatch, download, logoShirt, stylishShirt, logoControls, textIcon, textureLogoPicker, texture1, texture2, texture3, texture4, texture5, logo1,  logo2, logo3, logo4, logo5, logo6 };
