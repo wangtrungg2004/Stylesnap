@@ -13,8 +13,8 @@ import texture3 from "./texture3.jpeg";
 import texture4 from "./texture4.jpeg";
 import texture5 from "./texture5.jpeg";
 
-import logo1 from "./logos/logo1.png";
-import logo2 from "./logos/logo2.png";
+import logo1 from "./logo1.png";
+import logo2 from "./logo2.png";
 import logo3 from "./logos/logo3.png";
 import logo4 from "./logos/logo4.png";
 import logo5 from "./logos/logo5.png";
