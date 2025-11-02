@@ -1,206 +1,242 @@
-// server/routes/order.js
-import { Router } from 'express';
-import multer from 'multer';
-import { sendMail } from '../utils/mailer.js';
-import { supabaseAdmin } from '../utils/supabase.js'; // <-- THÊM: Import Supabase admin
+// server/src/routes/order.js
+import express from "express";
+import { sendMail } from "../utils/mailer.js";
 
-const router = Router();
+const router = express.Router();
 
-// Cấu hình Multer để nhận FormData (lưu file trong bộ nhớ)
-// 'qrProofFile' phải khớp với key trong FormData của frontend
-const upload = multer({ 
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
-});
-
-function genOrderCode() {
-  return 'SS-' + Math.random().toString(36).slice(2, 8).toUpperCase();
-}
-
-/** ===== YÊU CẦU 3: Hàm upload ảnh bằng chứng ===== */
-async function uploadProofToSupabase(file) {
-  if (!file) return null;
-
+// Format VND an toàn
+const vnd = (n) => {
+  const num = Number(n) || 0;
   try {
-    // Lấy bucket PROOFS từ .env
-    const bucket = process.env.SUPABASE_PROOFS_BUCKET || 'stylesnap-proofs'; 
-    
-    const stamp = Date.now();
-    const safeName = (file.originalname || 'proof.jpg').replace(/[^a-zA-Z0-9._-]/g, '_');
-    const key = `proofs/${stamp}-${safeName}`;
-
-    // Upload buffer lên Supabase Storage
-    const { error: upErr } = await supabaseAdmin.storage
-      .from(bucket)
-      .upload(key, file.buffer, { contentType: file.mimetype || 'application/octet-stream' });
-
-    if (upErr) throw upErr;
-
-    // Lấy Public URL (giả định bucket `stylesnap-proofs` là public)
-    const { data } = supabaseAdmin.storage.from(bucket).getPublicUrl(key);
-    
-    return data?.publicUrl || null;
-
-  } catch (err) {
-    console.error('Supabase proof upload failed:', err.message);
-    return null; // Trả về null nếu upload lỗi
+    return num.toLocaleString("vi-VN", { style: "currency", currency: "VND" });
+  } catch {
+    return `${num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")} ₫`;
   }
+};
+
+// Nhãn chất liệu
+const MATERIAL_LABELS = {
+  cotton100: "Cotton 100%",
+  cottonBlend: "Cotton pha",
+};
+
+// Mã đơn
+function makeOrderNo() {
+  const s = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `SS-${s}`;
 }
 
-// Sửa route để nhận `FormData`
-router.post('/', upload.single('qrProofFile'), async (req, res) => {
+function imgRow(url, label) {
+  if (!url)
+    return `<tr><td style="padding:8px 10px;border-top:1px solid #ccc;width:120px">${label}</td><td style="padding:8px 10px;border-top:1px solid #ccc;color:#666">(không có)</td></tr>`;
+  const esc = String(url);
+  return `
+  <tr>
+    <td style="padding:8px 10px;border-top:1px solid #ccc;width:120px">${label}</td>
+    <td style="padding:8px 10px;border-top:1px solid #ccc">
+      <a href="${esc}" target="_blank" rel="noopener">
+        <img src="${esc}" alt="${label}" style="width:260px;max-width:100%;height:auto;border:1px solid #eee;border-radius:8px;display:block" />
+      </a>
+    </td>
+  </tr>`;
+}
+
+function buildDesignSection({
+  colorHex,
+  designId,
+  previewFrontUrl,
+  previewBackUrl,
+  userAssetUrl,
+}) {
+  const colorCell = colorHex
+    ? `<span style="display:inline-block;width:12px;height:12px;border:1px solid #ccc;border-radius:2px;background:${colorHex};vertical-align:middle;margin-right:6px"></span> ${colorHex}`
+    : "(không có)";
+  return `
+  <h3 style="margin:20px 0 8px">Chi tiết thiết kế</h3>
+  <table style="border-collapse:collapse;border:1px solid #ccc;min-width:520px">
+    <tr><td style="padding:8px 10px;width:120px">Màu vải</td><td style="padding:8px 10px">${colorCell}</td></tr>
+    <tr><td style="padding:8px 10px;border-top:1px solid #ccc">Design ID</td><td style="padding:8px 10px;border-top:1px solid #ccc">${designId || "chưa lưu"}</td></tr>
+    ${imgRow(previewFrontUrl, "Front")}
+    ${imgRow(previewBackUrl, "Back")}
+    ${imgRow(userAssetUrl, "Upload")}
+  </table>`;
+}
+
+function buildProductSection({ material, size, quantity, pricing }) {
+  const matLabel = MATERIAL_LABELS[material] || material || "(không có)";
+  const appliedLabel =
+    pricing?.applied === "wholesale"
+      ? "Sỉ"
+      : pricing?.applied === "retail"
+      ? "Lẻ"
+      : "Giá cố định";
+  const unitPrice = pricing?.unitPrice ?? null;
+  const totalRetail = pricing?.totalRetail ?? null;
+  const totalWholesale = pricing?.totalWholesale ?? null;
+  const chargeTotal = pricing?.chargeTotal ?? null;
+
+  return `
+  <h3 style="margin:20px 0 8px">Sản phẩm</h3>
+  <table style="border-collapse:collapse;border:1px solid #ccc;min-width:520px">
+    <tr><td style="padding:8px 10px;width:160px">Chất liệu áo</td><td style="padding:8px 10px">${matLabel}</td></tr>
+    <tr><td style="padding:8px 10px;border-top:1px solid #ccc">Size</td><td style="padding:8px 10px;border-top:1px solid #ccc">${size || "(không có)"}</td></tr>
+    <tr><td style="padding:8px 10px;border-top:1px solid #ccc">Số lượng</td><td style="padding:8px 10px;border-top:1px solid #ccc">${Number(quantity) || 0}</td></tr>
+    <tr><td style="padding:8px 10px;border-top:1px solid #ccc">Loại giá áp dụng</td><td style="padding:8px 10px;border-top:1px solid #ccc">${appliedLabel}</td></tr>
+    <tr><td style="padding:8px 10px;border-top:1px solid #ccc">Đơn giá áp dụng</td><td style="padding:8px 10px;border-top:1px solid #ccc">${unitPrice != null ? vnd(unitPrice) : "(không có)"}</td></tr>
+    <tr><td style="padding:8px 10px;border-top:1px solid #ccc">Tổng tiền lẻ</td><td style="padding:8px 10px;border-top:1px solid #ccc">${totalRetail != null ? vnd(totalRetail) : "(không có)"}</td></tr>
+    <tr><td style="padding:8px 10px;border-top:1px solid #ccc">Tổng tiền sỉ</td><td style="padding:8px 10px;border-top:1px solid #ccc">${totalWholesale != null ? vnd(totalWholesale) : "(không có)"}</td></tr>
+    <tr><td style="padding:8px 10px;border-top:1px solid #ccc"><b>Tổng tiền phải trả</b></td><td style="padding:8px 10px;border-top:1px solid #ccc"><b>${chargeTotal != null ? vnd(chargeTotal) : "(không có)"}</b></td></tr>
+  </table>`;
+}
+
+function buildPaymentSection({ method, bank, qrProofUrl }) {
+  const isQR = String(method).toLowerCase() === "qr";
+  if (!isQR) {
+    return `
+      <h3 style="margin:20px 0 8px">Thanh toán</h3>
+      <p>Phương thức: <b>${(method || "").toUpperCase()}</b></p>
+    `;
+  }
+  const bankHtml = bank
+    ? `
+    <div class="text-sm" style="margin-bottom:8px">
+      <div><b>Chủ TK:</b> ${bank.accountName || "-"}</div>
+      <div><b>Số TK:</b> ${bank.accountNumber || "-"}</div>
+      <div><b>Ngân hàng:</b> ${bank.bankName || "-"}</div>
+    </div>`
+    : "";
+
+  const proofHtml = qrProofUrl
+    ? `
+    <div style="margin-top:8px">
+      <div style="font-weight:600;margin-bottom:6px">Ảnh xác nhận chuyển khoản</div>
+      <a href="${qrProofUrl}" target="_blank" rel="noopener">
+        <img src="${qrProofUrl}" alt="QR payment proof"
+             style="max-width:320px;height:auto;border:1px solid #eee;border-radius:8px" />
+      </a>
+    </div>`
+    : `<div style="color:#666">(Chưa kèm ảnh xác nhận)</div>`;
+
+  return `
+    <h3 style="margin:20px 0 8px">Thanh toán</h3>
+    <p>Phương thức: <b>QR chuyển khoản</b></p>
+    ${bankHtml}
+    ${proofHtml}
+  `;
+}
+
+router.post("/", async (req, res) => {
   try {
-    // Dữ liệu text giờ nằm trong req.body
     const {
-      name, phone, email, address,
+      name,
+      phone,
+      email,
+      address,
       method,
-      previewFrontUrl, previewBackUrl, userAssetUrl,
-      colorHex, designId,
-      material, // <-- YÊU CẦU 1 (mới)
-      size,     // <-- YÊU CẦU 1 (mới)
-      totalAmount // <-- YÊU CẦU 2 (mới)
+      // thiết kế
+      colorHex,
+      designId,
+      previewFrontUrl,
+      previewBackUrl,
+      userAssetUrl,
+      // sản phẩm & giá
+      material,
+      size,
+      quantity,
+      pricing,
+      // QR thủ công
+      qrProofUrl,
+      bank,
     } = req.body || {};
 
-    // File ảnh bằng chứng (nếu có) nằm trong req.file
-    const proofFile = req.file;
-
-    const orderNo = genOrderCode();
-    
-    let qrProofUrl = null; // Biến chứa URL ảnh bằng chứng
-
-    // ===== YÊU CẦU 3: Upload ảnh bằng chứng =====
-    if (method === 'qr' && proofFile) {
-      qrProofUrl = await uploadProofToSupabase(proofFile);
-      if (!qrProofUrl) {
-        // Nếu upload lỗi, báo cho người dùng
-        return res.status(500).json({ ok: false, error: 'Upload ảnh bằng chứng thất bại.' });
-      }
+    if (!name || !phone || !address || !method) {
+      return res
+        .status(400)
+        .json({ error: "Thiếu thông tin bắt buộc (name/phone/address/method)" });
     }
 
-    // Trả về response cho frontend ngay
-    res.json({ ok: true, orderNo });
+    const isQR = String(method).toLowerCase() === "qr";
+    const safeProofUrl = isQR ? qrProofUrl || null : null;
+    const safeBank = isQR ? bank || null : null;
 
-    // ===== Soạn mail (chạy ngầm sau khi đã response) =====
-    const ts = Date.now();
-    const atts = []; // Mảng đính kèm
+    const orderNo = makeOrderNo();
 
-    // Đính kèm ảnh thiết kế
-    if (previewFrontUrl) {
-      atts.push({
-        cid: `${orderNo}-front`,
-        filename: `${orderNo}-front-${ts}.jpg`,
-        path: previewFrontUrl
-      });
-    }
-    if (previewBackUrl) {
-      atts.push({
-        cid: `${orderNo}-back`,
-        filename: `${orderNo}-back-${ts}.jpg`,
-        path: previewBackUrl
-      });
-    }
-    if (userAssetUrl) {
-      const ext = (userAssetUrl.split('?')[0].split('.').pop() || 'jpg').toLowerCase();
-      atts.push({
-        cid: `${orderNo}-upload`,
-        filename: `${orderNo}-upload-${ts}.${ext}`,
-        path: userAssetUrl
-      });
-    }
-
-    // YÊU CẦU 3: Đính kèm ảnh bằng chứng
-    if (qrProofUrl) {
-      atts.push({
-        cid: `${orderNo}-proof`,
-        filename: `${orderNo}-proof-${ts}.jpg`,
-        path: qrProofUrl // Dùng URL đã upload
-      });
-    }
-
-    // Sửa đổi HTML Email
-    const html = `
-      <div style="font-family: sans-serif; font-size: 14px; max-width: 600px;">
-        <h1>Đơn hàng mới: ${orderNo}</h1>
-        <p><b>Khách hàng:</b> ${name}</p>
-        <p><b>Số điện thoại:</b> ${phone}</p>
+    const headerHtml = `
+      <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;color:#111;line-height:1.6">
+        <h2 style="margin:0 0 10px">Đơn hàng mới: ${orderNo}</h2>
+        <p><b>Từ:</b> ${name} (${phone})</p>
         <p><b>Địa chỉ:</b> ${address}</p>
-        ${email ? `<p><b>Email:</b> ${email}</p>` : ''}
-        
-        <hr style="border:0; border-top:1px solid #ccc" />
-        
-        <h3>Chi tiết sản phẩm</h3>
-        <table cellpadding="6" style="border-collapse: collapse; width: 100%;">
-          <tr style="border-bottom: 1px solid #ddd;">
-            <td style="width: 120px;"><b>Chất liệu:</b></td>
-            <td>${material || 'Không rõ'}</td>
-          </tr>
-          <tr style="border-bottom: 1px solid #ddd;">
-            <td><b>Size áo:</b></td>
-            <td>${size || 'Không rõ'}</td>
-          </tr>
-          <tr style="border-bottom: 1px solid #ddd;">
-            <td><b>Màu vải:</b></td>
-            <td><div style="width: 20px; height: 20px; background-color:${colorHex || '#fff'}; border: 1px solid #888;"></div></td>
-          </tr>
-          <tr style="border-bottom: 1px solid #ddd;">
-            <td><b>Tổng tiền:</b></td>
-            <td><b>${Number(totalAmount || 0).toLocaleString('vi-VN')} đ</b></td>
-          </tr>
-          <tr style="border-bottom: 1px solid #ddd;">
-            <td><b>Thanh toán:</b></td>
-            <td>${method === 'qr' ? 'Quét QR (Đã gửi bằng chứng)' : 'COD'}</td>
-          </tr>
-        </table>
-        
-        <hr style="border:0; border-top:1px solid #ccc" />
-
-        <h3>Thiết kế</h3>
-        <table cellpadding="6" style="width: 100%;">
-          <tr>
-            <td style="width: 120px;">Mặt trước</td>
-            <td>${atts.find(a=>a.cid?.endsWith('front')) ? `<img src="cid:${orderNo}-front" width="320" />` : '(không có)'}</td>
-          </tr>
-          <tr>
-            <td>Mặt sau</td>
-            <td>${atts.find(a=>a.cid?.endsWith('back')) ? `<img src="cid:${orderNo}-back" width="320" />` : '(không có)'}</td>
-          </tr>
-          <tr>
-            <td>Ảnh Upload</td>
-            <td>${atts.find(a=>a.cid?.endsWith('upload')) ? `<img src="cid:${orderNo}-upload" width="320" />` : '(không có)'}</td>
-          </tr>
-        </table>
-        
-        ${qrProofUrl ? `
-          <hr style="border:0; border-top:1px solid #ccc" />
-          <h3>Bằng chứng chuyển khoản (QR)</h3>
-          <img src="cid:${orderNo}-proof" width="320" />
-        ` : ''}
-
-        <hr style="border:0; border-top:1px solid #ccc; margin-top: 20px" />
-        <p style="font-size: 12px; color: #777;">Design ID: ${designId || 'N/A'}</p>
+        ${email ? `<p><b>Email khách:</b> ${email}</p>` : ""}
+        <p><b>Phương thức:</b> ${method?.toUpperCase()}</p>
       </div>
     `;
 
+    const designBlock = buildDesignSection({
+      colorHex,
+      designId,
+      previewFrontUrl,
+      previewBackUrl,
+      userAssetUrl,
+    });
+    const productBlock = buildProductSection({
+      material,
+      size,
+      quantity,
+      pricing,
+    });
+    const paymentBlock = buildPaymentSection({
+      method,
+      bank: safeBank,
+      qrProofUrl: safeProofUrl,
+    });
+
+    const attachments = [];
+    if (safeProofUrl) {
+      attachments.push({
+        filename: "qr-proof.jpg",
+        path: safeProofUrl,
+        cid: "qrproof@stylesnap",
+      });
+    }
+
+    // Xưởng
     const factoryTo = process.env.FACTORY_EMAIL;
-    const shopFrom  = process.env.SMTP_USER;
-
-    // Gửi cho khách (nếu có email)
-    if (email) {
-      sendMail({ to: email, subject: `Xác nhận đơn hàng - ${orderNo}`, html, attachments: atts })
-        .catch(err => console.error('[mail buyer]', err));
-    }
-    // Gửi cho xưởng
     if (factoryTo) {
-      sendMail({ to: factoryTo, subject: `[XƯỞNG] Đơn mới - ${orderNo}`, html, attachments: atts })
-        .catch(err => console.error('[mail factory]', err));
+      const htmlFactory = `${headerHtml}${designBlock}${productBlock}${paymentBlock}`;
+      await sendMail({
+        to: factoryTo,
+        subject: `Đơn hàng mới: ${orderNo}`,
+        html: htmlFactory,
+        attachments, // chỉ có khi QR
+      });
     }
 
-  } catch (err) {
-    console.error('[ORDER FAILED]', err);
-    // Nếu lỗi trước khi res.json(), gửi response lỗi
-    if (!res.headersSent) {
-      res.status(500).json({ ok: false, error: err.message || 'Server error' });
+    // Khách
+    if (email) {
+      const htmlCustomer = `
+        <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;color:#111;line-height:1.6">
+          <h2 style="margin:0 0 10px">Xác nhận đơn hàng: ${orderNo}</h2>
+          <p>Cảm ơn bạn đã đặt hàng tại Stylesnap.</p>
+        </div>
+        ${designBlock}
+        ${productBlock}
+        ${paymentBlock}
+        <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:13px;color:#444;margin-top:12px">
+          <p>Nếu có sai sót thông tin, vui lòng phản hồi email này để được hỗ trợ.</p>
+        </div>
+      `;
+      await sendMail({
+        to: email,
+        subject: `Xác nhận đơn hàng – ${orderNo}`,
+        html: htmlCustomer,
+        attachments, // chỉ có khi QR
+      });
     }
+
+    return res.json({ ok: true, orderNo });
+  } catch (err) {
+    console.error("order error:", err?.message || err);
+    return res.status(500).json({ error: "Order error" });
   }
 });
 
