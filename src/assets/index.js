@@ -13,12 +13,13 @@ import texture3 from "./texture3.jpeg";
 import texture4 from "./texture4.jpeg";
 import texture5 from "./texture5.jpeg";
 
-import logo1 from "./logo1.png";
-import logo2 from "./logo2.png";
-import logo3 from "./logo3.png";
-import logo4 from "./logo4.png";
-import logo5 from "./logo5.png";
-import logo6 from "./logo6.jpg";
+import logo1 from "./logos/logo1.png";
+import logo2 from "./logos/logo2.png";
+import logo3 from "./logos/logo3.png";
+import logo4 from "./logos/logo4.png";
+import logo5 from "./logos/logo5.png";
+import logo6 from "./logos/logo6.jpg";
+
 
 
 export { fileIcon, swatch, download, logoShirt, stylishShirt, logoControls, textIcon, textureLogoPicker, texture1, texture2, texture3, texture4, texture5, logo1,  logo2, logo3, logo4, logo5, logo6 };

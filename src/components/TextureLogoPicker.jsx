@@ -4,11 +4,11 @@ import { logEvent } from '../lib/ga';
 
 // Quét tất cả ảnh trong 2 thư mục (build-time)
 const frontLogoFiles = import.meta.glob(
-  '/src/assets/**/*.{png,jpg,jpeg,svg,webp,gif}',
+  '/src/assets/logos/**/*.{png,jpg,jpeg,svg,webp,gif}',
   { eager: true, as: 'url' }
 );
 const backLogoFiles = import.meta.glob(
-  '/src/assets/**/*.{png,jpg,jpeg,svg,webp,gif}',
+  '/src/assets/logos/**/*.{png,jpg,jpeg,svg,webp,gif}',
   { eager: true, as: 'url' }
 );
 
