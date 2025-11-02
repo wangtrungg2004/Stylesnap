@@ -1,10 +1,43 @@
 import React from 'react';
 import { logEvent } from '../lib/ga';
 
+
+// Quét tất cả ảnh trong 2 thư mục (build-time)
+const frontLogoFiles = import.meta.glob(
+  '/src/assets/**/*.{png,jpg,jpeg,svg,webp,gif}',
+  { eager: true, as: 'url' }
+);
+const backLogoFiles = import.meta.glob(
+  '/src/assets/**/*.{png,jpg,jpeg,svg,webp,gif}',
+  { eager: true, as: 'url' }
+);
+
+// Helper: lấy tên hiển thị từ tên file
+const fileToName = (p) =>
+  p.split('/').pop()?.replace(/\.(png|jpe?g|svg|webp|gif)$/i, '')?.replace(/[-_]+/g, ' ') || 'logo';
+
+const builtInFrontLogos = Object.entries(frontLogoFiles).map(([path, url]) => ({
+  type: 'frontLogo',
+  name: fileToName(path),
+  image: url,
+}));
+
+const builtInBackLogos = Object.entries(backLogoFiles).map(([path, url]) => ({
+  type: 'backLogo',
+  name: fileToName(path),
+  image: url,
+}));
+
 const TextureLogoPicker = ({ texturesLogos = [], handleTextureLogoClick }) => {
-  const textures   = texturesLogos.filter((it) => it.type === 'texture');
-  const frontLogos = texturesLogos.filter((it) => it.type === 'frontLogo');
-  const backLogos  = texturesLogos.filter((it) => it.type === 'backLogo');
+  // Nhóm từ props (nếu bạn vẫn truyền thêm bằng code cũ)
+  const texturesFromProps  = texturesLogos.filter((it) => it.type === 'texture');
+  const frontFromProps     = texturesLogos.filter((it) => it.type === 'frontLogo');
+  const backFromProps      = texturesLogos.filter((it) => it.type === 'backLogo');
+
+  // Gộp: logo có sẵn (quét thư mục) + logo truyền qua props
+  const textures  = [...texturesFromProps]; // giữ nguyên hoạ tiết cũ nếu có
+  const frontLogos = [...builtInFrontLogos, ...frontFromProps];
+  const backLogos  = [...builtInBackLogos,  ...backFromProps];
 
   const mapKind = (type) => {
     if (type === 'texture')   return 'full';
@@ -26,15 +59,15 @@ const TextureLogoPicker = ({ texturesLogos = [], handleTextureLogoClick }) => {
   const renderImages = (images) => (
     <div className="grid grid-cols-2 gap-2">
       {images.map((image, idx) => {
-        // Key luôn duy nhất & không rỗng
         const safeKey = `${image.type || 'item'}::${image.name || image.image || idx}`;
         return (
           <button
             type="button"
             key={safeKey}
             onClick={() => onPick(image)}
-            className="rounded-full overflow-hidden focus:outline-none"
+            className="rounded-full overflow-hidden focus:outline-none ring-1 ring-black/10 hover:ring-black/20"
             title={image.name}
+            aria-label={image.name || 'texture'}
           >
             <img src={image.image} alt={image.name} className="w-full h-auto" />
           </button>
@@ -45,12 +78,15 @@ const TextureLogoPicker = ({ texturesLogos = [], handleTextureLogoClick }) => {
 
   return (
     <div className="absolute left-full ml-3 space-y-2">
-      <div>
-        <h2 className="font-medium mb-1">Hoạ tiết</h2>
-        <div className="flex flex-wrap overflow-y-scroll w-40 h-40">
-          {renderImages(textures)}
+      {/* Nếu bạn muốn vẫn có mục Hoạ tiết từ props */}
+      {textures.length > 0 && (
+        <div>
+          <h2 className="font-medium mb-1">Hoạ tiết</h2>
+          <div className="flex flex-wrap overflow-y-scroll w-40 h-40">
+            {renderImages(textures)}
+          </div>
         </div>
-      </div>
+      )}
 
       <div>
         <h2 className="font-medium mb-1">Logo trước</h2>
